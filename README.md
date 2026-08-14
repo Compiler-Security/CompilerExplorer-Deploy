@@ -1,6 +1,6 @@
 # 内网自托管 Compiler Explorer
 
-面向受信内网的 Compiler Explorer，提供 Clang、LLVM IR、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
+面向受信内网的 Compiler Explorer，提供 C/C++、Clang、LLVM IR、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
 
 主路径是在 Docker 中启动 QEMU/KVM VM，CE 在 VM 内以非 root 用户运行，并用 nsjail 隔离每次编译。Kata Containers 是保留的备选路径。
 
@@ -113,13 +113,14 @@ stage('deploy to CE') {
 
 | 文件 | 作用 |
 |---|---|
-| `config/c++.local.properties` | Clang/GCC、交叉编译与在线运行开关 |
+| `config/c.local.properties` | C 的 Clang/GCC 与 riscv64 交叉编译 |
+| `config/c++.local.properties` | C++ 的 Clang/GCC、交叉编译与在线运行开关 |
 | `config/llvm.local.properties` | LLVM IR 的 clang、`llc` 与 `opt` |
 | `config/mlir.local.properties` | 自研 `mlir-opt` / `mlir-translate` |
 | `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
 | `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
 
-默认通过 `restrictToLanguages=c++,llvm,mlir` 只加载 C++、LLVM IR 和 MLIR。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。需要 C 语言时，将 `c` 加入逗号分隔的白名单并提供对应的 `c.local.properties`。
+默认通过 `restrictToLanguages=c,c++,llvm,mlir` 只加载 C、C++、LLVM IR 和 MLIR。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
 
 默认只允许编译，不运行用户程序。若需要开放 x86_64 产物执行，将 `supportsExecute` 改为 `true` 后重启 CE；riscv64 产物仍需 qemu-user。
 
