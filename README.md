@@ -88,6 +88,16 @@ scripts/update-ce.sh gh-<new-tag>
 改 `.env` 的 `CE_REF` → force-recreate qemu 容器 → VM 的 entrypoint 检测到版本变化会
 重建 VM 磁盘（保留云镜像底包不重下）→ cloud-init 按新 tag 重新装配 CE。期间 CE 停机几分钟。
 
+**只想改配置 / 加 SSH 公钥 / 上次装配失败要恢复**（CE_REF 没变也想强制重新装配）：
+
+```bash
+FORCE_REPROVISION=1 docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
+```
+
+> 说明：CE 的覆盖配置（`config/*.local.properties`）在 VM 里是**符号链接到 9p 实时共享**的，
+> 所以改配置一般不用重建 VM——SSH 进 VM `sudo systemctl restart ce.service` 即可生效。
+> 只有 CE 版本、SSH 公钥这类「首次装配才写进 guest」的东西才需要 FORCE_REPROVISION。
+
 ### SSH 管理通道（可选）
 
 工具链更新后要**立即**清 CE 缓存，需能从宿主机进 VM 重启 CE。配置：
@@ -97,7 +107,8 @@ ssh-keygen -t ed25519 -f ~/.ssh/ce_vm_key -N ''
 # .env 里设:
 #   CE_VM_SSH_KEY=/path/to/.ssh/ce_vm_key       # 私钥（脚本用）
 #   CE_VM_SSH_PUBKEY=/path/to/.ssh/ce_vm_key.pub # 公钥（注入 VM 的 ce 用户）
-docker compose -f docker-compose.vm.yml up -d --force-recreate qemu   # 注入公钥需重建 seed
+# 公钥是首次装配时写进 guest 的，后加/更换公钥要强制重配：
+FORCE_REPROVISION=1 docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
 ```
 
 VM 内 `ce` 用户的 sudo 只放行 `systemctl restart/status/is-active ce.service`（最小权限）。
@@ -156,7 +167,12 @@ compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 - 危险编译选项黑名单：`optionsForbiddenRe=--plugin|-fplugin|--wrapper`。
 - **供应链完整性**：`update-clang-gcc.sh` 每次实际下载后核对 SHA256（`.env` 钉 `LLVM_SHA256` / `GCC_SHA256` /
   `GCC_RISCV_SHA256` 即强制比对、不符即中止）；LLVM 包在有 `gpg` 时用官方 `.sig` 验签；prepkg 只能钉哈希。
-- 建议把 CE 镜像/依赖纳入常规漏洞扫描。
+  云镜像与 Node tarball 同理：`VM_IMAGE_SHA256` / `NODE_SHA256` 钉值校验（Node 默认也会用官方 SHASUMS256.txt 核对）。
+- 建议把 CE 依赖纳入常规漏洞扫描。
+
+**已知残留（按需再加固）**：Guest 出口网络默认未限制（user-net NAT；要锁可在装配后把 QEMU 网络改成仅 hostfwd）；
+CE 升级是重建 overlay、无快照回滚（底包保留，可在删前手动备份旧 overlay）；优雅关机走 ACPI powerdown（monitor socket），
+极端卡死仍靠超时强杀。
 
 ## 故障排查
 
@@ -172,9 +188,14 @@ compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 - **RISC-V 交叉找不到 C 库头文件**：在 `clangriscv` 那条补 `--sysroot=<gcc-riscv-latest>/riscv64-linux-gnu/sysroot`
   （确切路径以实际解压为准，见 `c++.local.properties` 注释）。
 - **MLIR fork 起不来**：多半缺运行库 → 设 `compiler.myopt.ldPath`（见上）。
-- **nsjail 报 `Launching child process failed`**：VM 内 cgroup 没建好。SSH 进 VM 确认
-  `ls -la /sys/fs/cgroup/ce-compile ce-sandbox` 存在且属主是 uid 10001（provision 已跑 `setup-nsjail-cgroups.sh`）。
-- **改了 CE 配置没生效**：cloud-init 只在首启装配。改配置后 `scripts/update-ce.sh <当前tag>` 重建，
-  或 SSH 进 VM 改 `/opt/ce/etc/config/` 再 `systemctl restart ce`。
+- **nsjail 报 `Launching child process failed`**：VM 内 cgroup 没建好。provision 已用
+  `setup-nsjail-cgroups.sh --install-systemd`（重启不丢）。SSH 进 VM 确认
+  `ls -la /sys/fs/cgroup/ce-compile ce-sandbox` 存在且属主是 uid 10001。
+- **编译器突然全部消失（VM 重启后）**：9p 挂载没起来。已写入 `/etc/fstab` 持久化；SSH 进 VM 确认
+  `mount | grep 9p` 有 compilers/cerepo，没有则 `mount -a`。ce.service 带 `RequiresMountsFor=` 兜底。
+- **改了 CE 配置没生效**：配置是软链到 9p 实时共享的，SSH 进 VM `sudo systemctl restart ce.service` 即可。
+  若是 CE 版本/SSH 公钥这类首次装配才写入 guest 的，用 `FORCE_REPROVISION=1`（见「CE 本体」一节）。
+- **上次装配失败、磁盘坏了起不来**：`FORCE_REPROVISION=1 docker compose -f docker-compose.vm.yml up -d --force-recreate qemu`
+  强制重建 VM 磁盘重新装配。
 - **SELinux（宿主机 Enforcing）**：9p 共享的目录要能被 qemu 容器读；必要时给 `docker-compose.vm.yml`
   里那两个挂载追加 `:z`。

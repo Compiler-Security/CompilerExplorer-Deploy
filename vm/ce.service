@@ -2,6 +2,8 @@
 Description=CompilerExplorer
 After=network-online.target
 Wants=network-online.target
+# 编译器与配置都来自 9p 挂载点；挂载不在就不要起 CE（避免起在半空环境）。
+RequiresMountsFor=/opt/compiler-explorer /mnt/ce-repo
 
 [Service]
 Type=simple

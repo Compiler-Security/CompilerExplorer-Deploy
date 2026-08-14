@@ -36,4 +36,7 @@ cat <<EOF
      docker compose -f docker-compose.vm.yml logs -f qemu
 >> 装配完成后验证:
      curl http://127.0.0.1:10240/api/version
+
+>> 提示：CE_REF 没变也想强制重新装配（改配置 / 加 SSH 公钥 / 上次装配失败恢复）：
+     FORCE_REPROVISION=1 docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
 EOF

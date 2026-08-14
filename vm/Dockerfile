@@ -7,7 +7,7 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      qemu-system-x86 qemu-utils genisoimage curl ca-certificates \
+      qemu-system-x86 qemu-utils genisoimage curl ca-certificates socat \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /vm
