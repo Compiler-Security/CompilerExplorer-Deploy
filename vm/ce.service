@@ -1,0 +1,22 @@
+[Unit]
+Description=CompilerExplorer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ce
+Group=ce
+WorkingDirectory=/opt/ce
+Environment=NODE_ENV=production
+Environment=TMPDIR=/tmp
+Environment=PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/node/bin/node /opt/ce/out/dist/app.js --static /opt/ce/out/webpack/static --host 0.0.0.0 --port 10240
+Restart=always
+RestartSec=3
+# 资源总额由 VM 规格（VM_CPUS/VM_MEM_MB）界定；nsjail 另做 per-compile 限额。
+# 注意不要在服务上设 MemoryMax/CPUQuota —— nsjail 会把编译迁到兄弟 cgroup，服务级限制管不到。
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

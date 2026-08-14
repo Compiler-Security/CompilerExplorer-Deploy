@@ -55,9 +55,12 @@ mv -T "${CE_COMPILERS_ROOT}/.${LINK_NAME}.tmp" "${CE_COMPILERS_ROOT}/${LINK_NAME
 echo ">> 已切换 ${LINK_NAME} -> ${TARGET}"
 "${CE_COMPILERS_ROOT}/${LINK_NAME}/bin/mlir-opt" --version | head -1 || true
 
-# 重启 CE，刷新其启动时缓存的 --version 显示（新编译本就会用新二进制）。
-echo ">> 重启 CE"
-docker compose -f "${COMPOSE_DIR}/docker-compose.yml" restart ce
+# 重启 CE（清编译缓存/刷新版本显示）。CE 在 VM 内，走 SSH；best-effort，不影响生效。
+# 新工具链经符号链接下次编译即生效；重启仅为立即清缓存。
+echo ">> 重启 CE（VM 内，best-effort）"
+# shellcheck source=lib-vm.sh
+source "${REPO_ROOT}/scripts/lib-vm.sh"
+restart_ce_in_vm
 
 # 清理旧 build，只保留最近 3 个（不含当前链接指向的）。
 cd "${CE_COMPILERS_ROOT}"

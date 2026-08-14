@@ -60,10 +60,10 @@ GCC_RISCV_SHA256="${GCC_RISCV_SHA256:-}"  # 对应 gcc riscv64 包
 
 DID_CHANGE=0   # 是否有实际下载/换链接；用于决定要不要重启 CE
 
-restart_ce() {
-  echo ">> 重启 CE"
-  docker compose -f "${COMPOSE_DIR}/docker-compose.yml" restart ce
-}
+# 共享「进 VM 重启 CE」帮助函数（best-effort 清缓存）。
+# shellcheck source=lib-vm.sh
+source "${REPO_ROOT}/scripts/lib-vm.sh"
+restart_ce() { restart_ce_in_vm; }
 
 # 原子拨链接
 point_link() { # point_link <link-name> <target-dir>

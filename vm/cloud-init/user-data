@@ -1,28 +1,40 @@
 #cloud-config
-# CompilerExplorer 隔离 VM 的首启装配（cloud-init, 仅实例首次启动执行一次）。
-# 依赖 QEMU 通过 9p 共享进来的两个目录：
-#   mount_tag=compilers -> 宿主机工具链根（只读）
-#   mount_tag=cerepo    -> 本仓库（只读；拷到可写副本后再跑）
-# VM 是专用的，内层 CE 用普通 docker(runc) + 最小权限容器即可（隔离由 VM 边界提供，
-# 无需 nsjail，也无需任何 cgroup/userns 前置）。
+# CompilerExplorer VM 首启装配（cloud-init，仅实例首次启动执行一次）。
+# CE 直接跑在 VM 上（node + systemd + nsjail），无内层 docker。
+# 依赖 QEMU 9p 共享：
+#   mount_tag=compilers -> 宿主机工具链根（只读，挂到 /opt/compiler-explorer）
+#   mount_tag=cerepo    -> 本仓库（只读，挂到 /mnt/ce-repo，取 config/ scripts/ vm/）
+# __CE_REF__ / __SSH_PUBKEY__ 由 vm/entrypoint.sh 在生成 seed 时注入。
 hostname: ce-vm
 preserve_hostname: false
 
 package_update: true
 packages:
-  - docker.io            # docker 引擎 + `docker compose`(v2)
-  - docker-compose-v2
   - curl
+  - ca-certificates
+  - openssh-server
+
+# ce 用户（uid 10001）：CE 进程与 nsjail 用；宿主机经 SSH 进来重启 CE 以清缓存。
+users:
+  - name: ce
+    uid: 10001
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+
+# 最小权限 sudo：只允许 ce 重启/查看 ce.service（供宿主机在工具链更新后清 CE 缓存）。
+write_files:
+  - path: /etc/sudoers.d/ce-restart
+    permissions: "0440"
+    content: |
+      ce ALL=(root) NOPASSWD: /bin/systemctl restart ce.service, /bin/systemctl status ce.service, /bin/systemctl is-active ce.service
 
 runcmd:
   # 1) 挂 9p 共享（只读）
-  - mkdir -p /opt/compiler-explorer /mnt/ce-repo-src /srv/ce-repo
+  - mkdir -p /opt/compiler-explorer /mnt/ce-repo
   - mount -t 9p -o trans=virtio,version=9p2000.L,ro compilers /opt/compiler-explorer
-  - mount -t 9p -o trans=virtio,version=9p2000.L,ro cerepo /mnt/ce-repo-src
+  - mount -t 9p -o trans=virtio,version=9p2000.L,ro cerepo /mnt/ce-repo
 
-  # 2) 拷一份可写仓库副本，写 VM 侧 .env（工具链指向 9p 挂载点；CE 绑 0.0.0.0 以接 hostfwd）
-  - cp -a /mnt/ce-repo-src/. /srv/ce-repo/
-  - printf 'CE_COMPILERS_ROOT=/opt/compiler-explorer\nCE_BIND_ADDR=0.0.0.0\n' > /srv/ce-repo/.env
-
-  # 3) 起 CE（首次会在 VM 内构建镜像，较慢；之后复用）
-  - cd /srv/ce-repo && docker compose up -d
+  # 2) 装配 CE（装 node、克隆并构建 CE@__CE_REF__、套配置、nsjail 前置、起 systemd 服务）
+  - bash /mnt/ce-repo/vm/provision-ce.sh "__CE_REF__"
