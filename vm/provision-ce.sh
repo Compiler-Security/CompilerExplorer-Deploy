@@ -92,12 +92,16 @@ if [[ ! -x /usr/local/bin/nsjail ]]; then
   rm -rf "${NSJAIL_SRC}"
   git clone --depth 1 --branch ce --recurse-submodules --shallow-submodules \
     https://github.com/compiler-explorer/nsjail.git "${NSJAIL_SRC}"
+  # GCC 15（Ubuntu 26.04）新增 enum/int 条件表达式的 -Wextra 诊断；
+  # 保留其余 -Werror，仅将 Wextra 降为普通警告。
+  printf '\nCXXFLAGS += -Wno-error=extra\n' >> "${NSJAIL_SRC}/Makefile"
   make -C "${NSJAIL_SRC}" -j"$(nproc)"
   cp "${NSJAIL_SRC}/nsjail" /usr/local/bin/nsjail
   chmod 0755 /usr/local/bin/nsjail
   rm -rf "${NSJAIL_SRC}"
 fi
-nsjail --help >/dev/null 2>&1
+[[ -x /usr/local/bin/nsjail ]] \
+  || { echo "错误: nsjail 未正确安装。" >&2; exit 1; }
 
 # ce 用户
 if id -u ce >/dev/null 2>&1; then
