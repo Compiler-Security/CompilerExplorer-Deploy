@@ -97,7 +97,7 @@ if [[ ! -x /usr/local/bin/nsjail ]]; then
   chmod 0755 /usr/local/bin/nsjail
   rm -rf "${NSJAIL_SRC}"
 fi
-nsjail --version >/dev/null
+nsjail --help >/dev/null 2>&1
 
 # ce 用户
 if id -u ce >/dev/null 2>&1; then
