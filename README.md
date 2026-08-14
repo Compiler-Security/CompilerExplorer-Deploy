@@ -1,6 +1,6 @@
 # 内网自托管 Compiler Explorer
 
-面向受信内网的 Compiler Explorer，提供 Clang/LLVM、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
+面向受信内网的 Compiler Explorer，提供 Clang、LLVM IR、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
 
 主路径是在 Docker 中启动 QEMU/KVM VM，CE 在 VM 内以非 root 用户运行，并用 nsjail 隔离每次编译。Kata Containers 是保留的备选路径。
 
@@ -8,7 +8,7 @@
 
 ```text
 宿主机
-├─ CE_COMPILERS_ROOT/                  # Clang/GCC/MLIR，9p 只读共享
+├─ CE_COMPILERS_ROOT/                  # Clang/LLVM/GCC/MLIR，9p 只读共享
 ├─ docker-compose.vm.yml
 │  └─ QEMU/KVM VM
 │     └─ CE + systemd + nsjail
@@ -41,6 +41,8 @@ curl http://127.0.0.1:10240/api/compilers
 ```
 
 首次启动会下载 Ubuntu 26.04 云镜像，并在 VM 内安装 Node、nsjail 和 CE，耗时通常比后续启动长。
+
+`update-clang-gcc.sh clang` 安装的 LLVM 工具链同时提供 C/C++ 下的 Clang，以及 `LLVM IR` 语言下的 clang、`llc` 和 `opt`。MLIR 不随它自动提供；只有执行 `deploy-mlir.sh` 并发布可用的 `mlir-custom` 后，CE 才会显示 `MLIR` 语言。
 
 ### 更新
 
@@ -112,6 +114,7 @@ stage('deploy to CE') {
 | 文件 | 作用 |
 |---|---|
 | `config/c++.local.properties` | Clang/GCC、交叉编译与在线运行开关 |
+| `config/llvm.local.properties` | LLVM IR 的 clang、`llc` 与 `opt` |
 | `config/mlir.local.properties` | 自研 `mlir-opt` / `mlir-translate` |
 | `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
 | `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
@@ -139,7 +142,9 @@ Clang riscv64 找不到 C 库头文件时，按实际 GCC 包布局给 `group.cl
 
 - `/dev/kvm` 不存在：启用 KVM 或嵌套虚拟化。
 - CE 未启动：查看 `docker compose -f docker-compose.vm.yml logs -f qemu`；VM 内可查 `journalctl -u ce -e`。
-- 编译器未出现在列表：确认 `CE_COMPILERS_ROOT/*-latest` 指向存在的同目录相对路径。
+- 编译器未出现在列表：确认 `CE_COMPILERS_ROOT/*-latest` 指向存在的同目录相对路径，并在更新工具链后重启 `ce.service` 刷新列表。
+- `LLVM IR` 不出现：确认 `clang-latest/bin/clang++` 可执行；旧 VM 还需存在 `/opt/ce/etc/config/llvm.local.properties` 软链。
+- `MLIR` 不出现：它不是 Clang 包的默认附带项；先确认 `mlir-custom/bin/mlir-opt` 和 `mlir-translate` 均可执行。
 - 更新后仍显示旧结果：重启 `ce.service` 清理 CE 缓存。
 - Clang 缺少 libstdc++/启动文件：检查 `--gcc-toolchain=/opt/compiler-explorer/gcc-latest`。
 - MLIR 缺运行库：设置 `compiler.myopt.ldPath`。

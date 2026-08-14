@@ -29,6 +29,7 @@ services:
       # SELinux Enforcing 时给此挂载追加 z。
       - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT（cp .env.example .env 后改实际路径）}:/opt/compiler-explorer:ro"
       - ./config/c++.local.properties:/ce/etc/config/c++.local.properties:ro
+      - ./config/llvm.local.properties:/ce/etc/config/llvm.local.properties:ro
       - ./config/mlir.local.properties:/ce/etc/config/mlir.local.properties:ro
       - ./config/compiler-explorer.local.properties:/ce/etc/config/compiler-explorer.local.properties:ro
       # Kata 已提供 VM 边界，不启用容器内 nsjail。
