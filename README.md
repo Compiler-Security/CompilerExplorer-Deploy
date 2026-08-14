@@ -1,201 +1,149 @@
-# 内网自托管 CompilerExplorer（Clang/LLVM + GCC + 自研 MLIR）
+# 内网自托管 Compiler Explorer
 
-一键部署的 CompilerExplorer，跑在一个 **QEMU/KVM VM** 里，而这个 VM 由一个 Docker 容器启动。
-内置可独立更新的工具链：
+面向受信内网的 Compiler Explorer，提供 Clang/LLVM、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
 
-- **Clang/LLVM**（官方预编译，最新版；**全后端通用** —— 同一份 clang 加 `--target=riscv64-linux-gnu` 即可交叉 RISC-V）
-- **GCC x86_64 原生 + GCC riscv64 交叉**（prepkg 预编译，GCC 最新，glibc 2.17 基线）
-- **Clang riscv64 交叉**（复用 clang 二进制 + `--target`，无需单独下载）
-- **自研 MLIR**（你们 Jenkins 每次提交 build，自动发布生效）
+主路径是在 Docker 中启动 QEMU/KVM VM，CE 在 VM 内以非 root 用户运行，并用 nsjail 隔离每次编译。Kata Containers 是保留的备选路径。
 
-实例面向内网，**不加认证、不做 TLS**，但按公网标准加固。
+## 架构
 
-## 隔离模型：Docker 里起 QEMU/KVM VM，CE 直接跑在 VM 内
-
-```
-共享宿主机
- ├─ <CE_COMPILERS_ROOT>/            # 工具链根（9p 只读共享进 VM; 路径在 .env 配）
- │    ├─ clang-<date>/  ← clang-latest (符号链接)
- │    ├─ gcc-<triple>-<date>/ ← gcc-latest / gcc-riscv-latest (符号链接)
- │    └─ mlir-custom.<build#>/ ← mlir-custom (符号链接)
- │
- ├─ docker compose -f docker-compose.vm.yml
- │    └─ qemu 容器（--device /dev/kvm）          ← 宿主机唯一暴露面
- │         └─ QEMU/KVM VM（独立内核, 8C/8G, virtio disk + user-net）
- │              └─ CE 直接跑在 VM 上：node + systemd 服务 + nsjail
- │                   （无内层 docker；nsjail 是裸机写法，不踩容器嵌套坑）
- │
- └─ 外部已有 nginx ── 反代到 127.0.0.1:10240 →(QEMU hostfwd)→ VM 的 CE
-        另: 宿主 127.0.0.1:2222 →(hostfwd)→ VM:22（SSH 管理 CE，可选）
+```text
+宿主机
+├─ CE_COMPILERS_ROOT/                  # Clang/GCC/MLIR，9p 只读共享
+├─ docker-compose.vm.yml
+│  └─ QEMU/KVM VM
+│     └─ CE + systemd + nsjail
+└─ nginx → 127.0.0.1:10240 → VM:10240
+             127.0.0.1:2222 → VM:22（可选管理通道）
 ```
 
-**隔离分两层**（纵深防御）：
-- **VM（hypervisor 硬边界）**——对共享宿主机。宿主**零改动**（不碰 cgroup/userns/AppArmor），别的租户不受影响。
-- **nsjail（VM 内）**——对每次编译/运行再沙箱一次。VM 是专用的，所以 nsjail 用最标准的裸机写法。
+部署机必须提供 `/dev/kvm`；若部署机本身是 VM，需要启用嵌套虚拟化。
 
-前提：部署机有 `/dev/kvm`（若部署机本身是 VM，需开嵌套虚拟化）。
+## QEMU 主路径
 
-> **备选**：若有一台装了 [Kata Containers](https://katacontainers.io/) 的专用机，可以不套 QEMU、让 CE 直接以
-> 容器跑在 Kata VM 里——用 `Dockerfile` + `docker-compose.yml` + `scripts/setup-kata.sh`（该路径保留为备选，
-> 本仓库主线是上面的 QEMU-in-Docker + VM 内直跑）。
-
-## 首次部署
+### 首次部署
 
 ```bash
-# 0. 配置 .env
 cp .env.example .env
-#    必填: CE_COMPILERS_ROOT（宿主机工具链根）
-#    可选: CE_REF（CE 版本）、CE_VM_SSH_KEY / CE_VM_SSH_PUBKEY（见下「SSH 管理通道」）
+# 编辑 .env，至少设置 CE_COMPILERS_ROOT
 
-# 1. 准备工具链目录（至少各放一份，并建好符号链接）
-mkdir -p "$(grep -E '^CE_COMPILERS_ROOT=' .env | cut -d= -f2)"
-scripts/update-clang-gcc.sh all        # 自动下载 Clang + 两种 GCC；或分开: clang / gcc / gcc-riscv
-#   - MLIR: 你们 Jenkins build 产物解压为 mlir-custom.<id>，ln -s 指向 mlir-custom
+scripts/update-clang-gcc.sh all
+# 自研 MLIR：scripts/deploy-mlir.sh <产物目录> <build-id>
 
-# 2. 起 QEMU/KVM VM（首启：下载云镜像 + cloud-init 装配 + 在 VM 内构建 CE，较慢）
 docker compose -f docker-compose.vm.yml build qemu
 docker compose -f docker-compose.vm.yml up -d
-docker compose -f docker-compose.vm.yml logs -f qemu   # 看 VM 串口日志 / cloud-init 进度
-
-# 3. 让外部 nginx 反代到 127.0.0.1:10240（把 nginx/ce.conf 丢进其 conf.d/，改 server_name 后 reload）
-
-# 4. 验证
-curl http://127.0.0.1:10240/api/compilers   # 应列出 clang/gcc/mlir-opt
+docker compose -f docker-compose.vm.yml logs -f qemu
 ```
 
-浏览器访问 `http://<服务器IP>/`，选语言（C++ 或 MLIR）与编译器即可。
-
-## 更新
-
-### 工具链（MLIR / Clang / GCC）—— 不动 VM
-
-工具链走宿主机目录 + 9p 共享，**实时反映进 VM**，无需重建。更新脚本：
+将 [nginx/ce.conf](nginx/ce.conf) 放入现有 nginx 的 `conf.d/`，修改 `server_name` 后 reload。验证：
 
 ```bash
-scripts/update-clang-gcc.sh {clang|gcc|gcc-riscv|all}   # 幂等：版本没变就不重下
-scripts/deploy-mlir.sh <产物目录> <build#>               # 由 Jenkins 调用
+curl http://127.0.0.1:10240/api/compilers
 ```
 
-两个脚本更新宿主机目录后会**尝试 SSH 进 VM 重启 CE**（清编译缓存/刷新版本显示）。
-这是 best-effort——不配 SSH 也不影响新工具链下次编译生效（exe 走符号链接）。
+首次启动会下载 Ubuntu 云镜像，并在 VM 内安装 Node、nsjail 和 CE，耗时通常比后续启动长。
 
-### CE 本体 —— 重建 VM 装配
+### 更新
+
+| 内容 | 命令 | 是否重建 VM |
+|---|---|---|
+| Clang/GCC | `scripts/update-clang-gcc.sh {clang\|gcc\|gcc-riscv\|all}` | 否 |
+| 自研 MLIR | `scripts/deploy-mlir.sh <产物目录> <build-id>` | 否 |
+| CE 本体 | `scripts/update-ce.sh gh-<release>` | 是 |
+| 覆盖配置 | 修改 `config/*.local.properties` 后重启 `ce.service` | 否 |
+
+工具链通过相对软链和 9p 共享立即生效。若 `.env` 配置了 `CE_VM_SSH_KEY`，更新脚本会 best-effort 重启 CE 以清理缓存；未配置时可手动执行：
 
 ```bash
-scripts/update-ce.sh gh-<new-tag>
+ssh -i <private-key> -p 2222 ce@127.0.0.1 \
+  'sudo systemctl restart ce.service'
 ```
 
-改 `.env` 的 `CE_REF` → force-recreate qemu 容器 → VM 的 entrypoint 检测到版本变化会
-重建 VM 磁盘（保留云镜像底包不重下）→ cloud-init 按新 tag 重新装配 CE。期间 CE 停机几分钟。
-
-**只想改配置 / 加 SSH 公钥 / 上次装配失败要恢复**（CE_REF 没变也想强制重新装配）：
+新增 SSH 公钥、修改 Node 版本，或恢复失败的首次装配时，用一个未使用过的令牌重建 overlay：
 
 ```bash
-FORCE_REPROVISION=1 docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
+FORCE_REPROVISION="$(date +%s%N)" \
+  docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
 ```
 
-> 说明：CE 的覆盖配置（`config/*.local.properties`）在 VM 里是**符号链接到 9p 实时共享**的，
-> 所以改配置一般不用重建 VM——SSH 进 VM `sudo systemctl restart ce.service` 即可生效。
-> 只有 CE 版本、SSH 公钥这类「首次装配才写进 guest」的东西才需要 FORCE_REPROVISION。
+同一令牌只触发一次删盘，避免容器自动重启时反复重建。
 
 ### SSH 管理通道（可选）
 
-工具链更新后要**立即**清 CE 缓存，需能从宿主机进 VM 重启 CE。配置：
-
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/ce_vm_key -N ''
-# .env 里设:
-#   CE_VM_SSH_KEY=/path/to/.ssh/ce_vm_key       # 私钥（脚本用）
-#   CE_VM_SSH_PUBKEY=/path/to/.ssh/ce_vm_key.pub # 公钥（注入 VM 的 ce 用户）
-# 公钥是首次装配时写进 guest 的，后加/更换公钥要强制重配：
-FORCE_REPROVISION=1 docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
 ```
 
-VM 内 `ce` 用户的 sudo 只放行 `systemctl restart/status/is-active ce.service`（最小权限）。
+在 `.env` 中设置：
 
-## 接 Jenkins（MLIR 自动发布）
+```dotenv
+CE_VM_SSH_KEY=/path/to/ce_vm_key
+CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
+```
 
-在你们**已有的 MLIR Jenkins job** 末尾加一个 deploy 阶段：
+公钥只在装配 guest 时写入；新增或更换后需使用新的 `FORCE_REPROVISION` 令牌。`ce` 用户的 sudo 权限仅覆盖 `ce.service` 的 restart/status/is-active。
+
+## Kata 备选路径
+
+在专用宿主机安装并注册 Kata runtime：
+
+```bash
+sudo scripts/setup-kata.sh
+docker compose up -d --build
+```
+
+`docker-compose.yml` 固定使用 `runtime: kata`，不启用容器内 nsjail。根文件系统只读，缓存和本地存储位于 tmpfs，容器重建后不保留。工具链或配置更新后执行 `docker compose restart ce`；`scripts/update-ce.sh` 仅适用于 QEMU 主路径。
+
+## Jenkins 发布 MLIR
+
+在现有 MLIR job 的成功阶段调用：
 
 ```groovy
 stage('deploy to CE') {
   steps {
-    // 路径指向部署机上的本仓库；脚本读 .env 的 CE_COMPILERS_ROOT，并 best-effort SSH 重启 CE
     sh '/path/to/ssct-compiler-explorer/scripts/deploy-mlir.sh "$WORKSPACE/build/install" "$BUILD_NUMBER"'
   }
 }
 ```
 
-脚本 rsync 产物到 `mlir-custom.<build#>` → 原子切 `mlir-custom` 链接（经 9p 实时进 VM）→ 保留最近 3 个旧版本可回滚。
-
-**不需要为 CE 部署单独建 Jenkins job**：Clang/GCC 手动跑脚本（或低频定时），CE 本体手动跑 `update-ce.sh`。
+产物目录必须包含可执行的 `bin/mlir-opt` 和 `bin/mlir-translate`。脚本先同步到临时目录，再原子切换 `mlir-custom` 相对软链，并保留当前版本与最近 3 个回滚版本。
 
 ## 配置
 
-所有 CE 覆盖配置在 `config/*.local.properties`，**改完需让 VM 里的 CE 重读**（进 VM `systemctl restart ce`，或 `update-ce.sh` 重建）：
-
 | 文件 | 作用 |
 |---|---|
-| `c++.local.properties` | 登记 Clang/GCC（`--gcc-toolchain`、demangler、Intel asm、riscv 交叉）、`supportsExecute` 开关 |
-| `mlir.local.properties` | 登记自研 `mlir-opt` / `mlir-translate`，可加默认 pass |
-| `compiler-explorer.local.properties` | 超时 / 并发 / 输出上限 / 危险 flag 黑名单 |
-| `execution.local.properties` | nsjail 沙箱开关（编译器 + 用户程序） |
+| `config/c++.local.properties` | Clang/GCC、交叉编译与在线运行开关 |
+| `config/mlir.local.properties` | 自研 `mlir-opt` / `mlir-translate` |
+| `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
+| `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
 
-### 给 MLIR 设默认 pass
+默认只允许编译，不运行用户程序。若需要开放 x86_64 产物执行，将 `supportsExecute` 改为 `true` 后重启 CE；riscv64 产物仍需 qemu-user。
 
-`mlir.local.properties` 里：
+MLIR 默认 pass 或运行库路径可在 `config/mlir.local.properties` 中设置：
 
 ```properties
 compiler.myopt.options=--mlir-print-ir-after-all
-```
-
-### 自研工具链库路径
-
-若 fork 的运行库不在系统路径，在 `mlir.local.properties` 加：
-
-```properties
 compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 ```
 
-## 安全说明（按公网标准，未开认证/TLS）
+Clang riscv64 找不到 C 库头文件时，按实际 GCC 包布局给 `group.clangriscv.options` 补 `--sysroot`。
 
-- **VM（hypervisor 硬边界）**：CE 跑在独立内核的 VM；共享宿主机零改动，别的租户不受影响。
-- **nsjail（VM 内）**：编译器沙箱（只读挂载、1.25GiB/72进程/单核、noexec tmpfs、无网络）+ 用户程序沙箱
-  （仅当 `supportsExecute=true`，更严）。当前默认只编译不运行。
-- **CE 进程**（VM 内）：非 root（uid 10001）、systemd 管理；SSH 进 VM 的 ce 用户 sudo 只放行 ce.service 的重启。
-- 外部 nginx（用 `nginx/ce.conf`）：安全响应头、限流、`client_max_body_size 16m`；CE 只到宿主机回环。
-- 危险编译选项黑名单：`optionsForbiddenRe=--plugin|-fplugin|--wrapper`。
-- **供应链完整性**：`update-clang-gcc.sh` 每次实际下载后核对 SHA256（`.env` 钉 `LLVM_SHA256` / `GCC_SHA256` /
-  `GCC_RISCV_SHA256` 即强制比对、不符即中止）；LLVM 包在有 `gpg` 时用官方 `.sig` 验签；prepkg 只能钉哈希。
-  云镜像与 Node tarball 同理：`VM_IMAGE_SHA256` / `NODE_SHA256` 钉值校验（Node 默认也会用官方 SHASUMS256.txt 核对）。
-- 建议把 CE 依赖纳入常规漏洞扫描。
+## 安全边界
 
-**已知残留（按需再加固）**：Guest 出口网络默认未限制（user-net NAT；要锁可在装配后把 QEMU 网络改成仅 hostfwd）；
-CE 升级是重建 overlay、无快照回滚（底包保留，可在删前手动备份旧 overlay）；优雅关机走 ACPI powerdown（monitor socket），
-极端卡死仍靠超时强杀。
+- QEMU 主路径以 VM 隔离共享宿主机，guest 内再以 nsjail 限制编译器和用户程序。
+- CE 以 uid 10001 运行；Compose 丢弃 capabilities、启用 `no-new-privileges`，入口只绑定回环。
+- nginx 限制请求体和请求速率，并设置基础安全响应头。
+- 工具链、Ubuntu 镜像、Node 和 Kata 支持 SHA256 校验；建议在 `.env` 固定已核对的工具链哈希。
+- 默认仍允许 guest 经 user-mode NAT 出网；CE 升级通过重建 overlay 完成，没有自动快照回滚。
 
 ## 故障排查
 
-- **`logs qemu` 报没有 /dev/kvm**：部署机没 KVM 或没开嵌套虚拟化（entrypoint 会拒绝启动而不是硬撑）。
-- **CE 一直没起来**：`docker compose -f docker-compose.vm.yml logs -f qemu` 看串口日志 / cloud-init；
-  首启要下云镜像 + 在 VM 里构建 CE，可能几分钟。也可 SSH 进 VM `journalctl -u ce -f` 看 CE 服务日志。
-- **CE 起来了但某编译器不在下拉框**：SSH 进 VM `journalctl -u ce | grep -i <名字>`；多为 `exe` 路径或符号链接断。
-  确认宿主机 `<CE_COMPILERS_ROOT>/*-latest` 指向有效目录。
-- **工具链更新后 UI 还是旧版本/旧结果**：CE 有编译缓存。配了 SSH 就让脚本自动重启；否则进 VM
-  `sudo systemctl restart ce.service`。
-- **编译报找不到 libstdc++/启动文件**：检查 `c++.local.properties` 的
-  `--gcc-toolchain=/opt/compiler-explorer/gcc-latest` 是否指向有效 GCC。
-- **RISC-V 交叉找不到 C 库头文件**：在 `clangriscv` 那条补 `--sysroot=<gcc-riscv-latest>/riscv64-linux-gnu/sysroot`
-  （确切路径以实际解压为准，见 `c++.local.properties` 注释）。
-- **MLIR fork 起不来**：多半缺运行库 → 设 `compiler.myopt.ldPath`（见上）。
-- **nsjail 报 `Launching child process failed`**：VM 内 cgroup 没建好。provision 已用
-  `setup-nsjail-cgroups.sh --install-systemd`（重启不丢）。SSH 进 VM 确认
-  `ls -la /sys/fs/cgroup/ce-compile ce-sandbox` 存在且属主是 uid 10001。
-- **编译器突然全部消失（VM 重启后）**：9p 挂载没起来。已写入 `/etc/fstab` 持久化；SSH 进 VM 确认
-  `mount | grep 9p` 有 compilers/cerepo，没有则 `mount -a`。ce.service 带 `RequiresMountsFor=` 兜底。
-- **改了 CE 配置没生效**：配置是软链到 9p 实时共享的，SSH 进 VM `sudo systemctl restart ce.service` 即可。
-  若是 CE 版本/SSH 公钥这类首次装配才写入 guest 的，用 `FORCE_REPROVISION=1`（见「CE 本体」一节）。
-- **上次装配失败、磁盘坏了起不来**：`FORCE_REPROVISION=1 docker compose -f docker-compose.vm.yml up -d --force-recreate qemu`
-  强制重建 VM 磁盘重新装配。
-- **SELinux（宿主机 Enforcing）**：9p 共享的目录要能被 qemu 容器读；必要时给 `docker-compose.vm.yml`
-  里那两个挂载追加 `:z`。
+- `/dev/kvm` 不存在：启用 KVM 或嵌套虚拟化。
+- CE 未启动：查看 `docker compose -f docker-compose.vm.yml logs -f qemu`；VM 内可查 `journalctl -u ce -e`。
+- 编译器未出现在列表：确认 `CE_COMPILERS_ROOT/*-latest` 指向存在的同目录相对路径。
+- 更新后仍显示旧结果：重启 `ce.service` 清理 CE 缓存。
+- Clang 缺少 libstdc++/启动文件：检查 `--gcc-toolchain=/opt/compiler-explorer/gcc-latest`。
+- MLIR 缺运行库：设置 `compiler.myopt.ldPath`。
+- nsjail 启动失败：确认 `/sys/fs/cgroup/ce-compile` 和 `ce-sandbox` 存在且归 uid 10001。
+- VM 重启后编译器全部消失：确认 `compilers` 与 `cerepo` 两个 9p 挂载存在；必要时在 VM 内执行 `mount -a`。
+- 配置未生效：重启 `ce.service`；只有装配期参数才需要 `FORCE_REPROVISION`。
+- SELinux Enforcing 阻止读取：按 Compose 注释给只读 bind mount 添加 `z` 标签选项。
