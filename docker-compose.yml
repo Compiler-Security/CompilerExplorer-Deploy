@@ -1,0 +1,52 @@
+name: ce
+
+# =============================================================================
+# CompilerExplorer 一键部署 / 更新（仅 CE 本体；nginx 用外部已有部署）
+#   docker compose up -d          # 启动
+#   docker compose restart ce     # 工具链或配置更新后重启 CE 生效
+#   docker compose build ce && docker compose up -d   # 更新 CE 本体
+#
+# CE 只发布到宿主机回环 127.0.0.1:10240，由外部 nginx 反代对外
+# （nginx 配置参考见 nginx/ce.conf）。
+# =============================================================================
+
+services:
+  ce:
+    build:
+      context: .
+      # 更新 CE 版本: 改 Dockerfile 里的 ARG CE_REF, 或:
+      #   docker compose build --build-arg CE_REF=gh-<newer> ce
+    image: ssct/compiler-explorer:local
+    container_name: ce-app
+    restart: unless-stopped
+
+    # 非 root（与 Dockerfile 中创建的用户一致）
+    user: "10001:10001"
+
+    # ---- 容器层加固（策略 A，无 nsjail，可锁到最严）----
+    read_only: true                      # 根文件系统只读
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      # 编译临时目录。只编译不运行 → noexec 可行；大编译给足空间。
+      - /tmp:rw,noexec,nosuid,nodev,size=2g
+
+    volumes:
+      # 工具链：宿主机目录只读挂载。更新工具链 = 改这里 + restart ce，零镜像重建。
+      # 若目标机开启 SELinux(Enforcing)，给所有挂载追加 ,z（如 :ro,z），否则容器读不到。
+      - /srv/ce/compilers:/opt/compiler-explorer:ro
+      # 配置：单文件只读覆盖到 etc/config（保留仓内 defaults，仅叠加 local 覆盖）。
+      - ./config/c++.local.properties:/ce/etc/config/c++.local.properties:ro
+      - ./config/mlir.local.properties:/ce/etc/config/mlir.local.properties:ro
+      - ./config/compiler-explorer.local.properties:/ce/etc/config/compiler-explorer.local.properties:ro
+      - ./config/execution.local.properties:/ce/etc/config/execution.local.properties:ro
+
+    ports:
+      # 只绑定回环：对外只经外部 nginx 暴露，CE 不直接对内网开放。
+      # 若 nginx 在另一台机器，把 127.0.0.1 换成宿主机内网 IP。
+      - "127.0.0.1:10240:10240"
+
+    # 资源上限（按 32C/30G 机器给；按需调整）
+    mem_limit: 6g
+    cpus: 8

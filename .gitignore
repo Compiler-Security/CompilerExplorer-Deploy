@@ -1,0 +1,16 @@
+# 本仓库只含部署脚手架；编译器与构建产物一律不入库。
+
+# 工具链/构建产物（在宿主机 /srv/ce/compilers，不在这里，双保险）
+/srv/
+compilers/
+*.tar
+*.tar.xz
+*.tar.gz
+
+# 系统/编辑器
+.DS_Store
+*.swp
+*~
+
+# 运行时
+*.log
