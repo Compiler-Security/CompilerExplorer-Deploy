@@ -149,19 +149,45 @@ compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 共享宿主机 cgroup），所以**真正的隔离由 nsjail 提供，容器边界被有意放宽**——这与官方 godbolt 的
 做法一致。若想在不放权的前提下隔离，可回头用纯容器方案（无 nsjail、不开放运行），见 git 历史首版。
 
+### 共享机 / 多租户：cgroup 委派（本仓库默认）
+
+因为部署机是**共享**的，本仓库**不采用**官方文档里 `chown uid /sys/fs/cgroup/cgroup.procs`
+的做法——那会让 CE 容器在整个宿主机范围迁移进程、可能把**别的租户**的进程拽出其资源限制组。
+改为**委派一个独立子树** `/sys/fs/cgroup/ce`：
+
+- 容器经 `cgroup_parent: /ce` 落进该子树；`ce-compile`/`ce-sandbox` 建在子树内；
+  cgroup v2 迁移的「公共祖先」就是 `/ce`（已 chown 给 CE 的 uid），**根 `cgroup.procs` 保持 root:root 不动**。
+- 容器内 uid 10001 只对 `/ce` 子树有写权（靠文件属主），即便它有 `SYS_ADMIN` 也写不动根/其它租户的 cgroup
+  （没给 `CAP_DAC_OVERRIDE`）。
+- `config/nsjail/*.cfg` 是基于官方 cfg 的拷贝，仅把 `cgroupv2_mount` 指向 `/ce/...`。
+
+**上机必验（唯一脆弱点）**：cgroup v2 要求「容器进程」与「jail cgroup」有 uid 可写的公共祖先，
+所以容器必须真的落在 `/ce` 下。docker 用 **systemd cgroup 驱动**时 `cgroup_parent` 的路径形式不同
+（可能要写成 slice 名）。部署后确认：
+
+```bash
+docker compose up -d ce
+systemd-cgls /sys/fs/cgroup/ce        # 应看到容器进程挂在 /ce 下
+docker inspect ce-app | grep -i cgroup # 看容器实际 cgroup 路径
+```
+
+若容器没落在 `/ce` 下（编译会报 `Launching child process failed`），按目标机的 docker cgroup 驱动调整
+`docker-compose.yml` 的 `cgroup_parent`（cgroupfs 驱动用 `/ce`；systemd 驱动可能需 `ce.slice`）。
+
 **开放「在线运行」**：把 `config/c++.local.properties` 的 `supportsExecute=false` 改成 `true`，
 再 `docker compose restart ce` 即可——nsjail 用户程序沙箱、宿主机 cgroup 都已就绪，无需其它改动。
 若安全部门日后要求 HTTPS，只需在 nginx 加证书，架构不变。
 
 ## 故障排查
 
-- **一编译就报 `Launching child process failed`**：nsjail 的 cgroup 没建好。
-  确认宿主机跑过 `sudo scripts/setup-nsjail-cgroups.sh`（或 `ce-cgroups.service` 已 enable 且重启后仍在）：
-  `ls -la /sys/fs/cgroup/ce-compile /sys/fs/cgroup/ce-sandbox`，且属主是 uid 10001。
+- **一编译就报 `Launching child process failed`**：nsjail 的 cgroup 委派没建好或容器没落进 `/ce`。
+  确认宿主机跑过 `sudo scripts/setup-nsjail-cgroups.sh`（或 `ce-cgroups.service` 已 enable）：
+  `ls -la /sys/fs/cgroup/ce/ce-compile /sys/fs/cgroup/ce/ce-sandbox`，且属主是 uid 10001；
+  再按「共享机 cgroup 委派」一节确认容器进程在 `/ce` 下。
   也可 `docker compose exec ce /usr/local/bin/nsjail --version` 确认二进制在。
 - **nsjail mount 报 `No such file or directory`**：某个非可选 mount 源在容器里不存在。
   常见是 `/etc/localtime`（镜像已装 tzdata 兜底）；若是自定义路径，往
-  `etc/nsjail/compilers-and-tools.cfg` 加对应 bind mount（见该 cfg 注释 / 官方 NsjailSandbox.md）。
+  `config/nsjail/compilers-and-tools.cfg` 加对应 bind mount（见该 cfg 注释 / 官方 NsjailSandbox.md）。
 - **怀疑容器放权/只读根导致 nsjail 失败**：临时把 `docker-compose.yml` 里 `read_only` 改 `false` 定位；
   仍不行就加 `privileged: true` 试（官方文档的兜底），定位后再收紧。
 - **目标机开了 SELinux（Enforcing）**：容器读不到挂载的配置/工具链（日志报 Permission denied）。
