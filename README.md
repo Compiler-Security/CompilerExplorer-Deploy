@@ -40,7 +40,7 @@ docker compose -f docker-compose.vm.yml logs -f qemu
 curl http://127.0.0.1:10240/api/compilers
 ```
 
-首次启动会下载 Ubuntu 云镜像，并在 VM 内安装 Node、nsjail 和 CE，耗时通常比后续启动长。
+首次启动会下载 Ubuntu 26.04 云镜像，并在 VM 内安装 Node、nsjail 和 CE，耗时通常比后续启动长。
 
 ### 更新
 
