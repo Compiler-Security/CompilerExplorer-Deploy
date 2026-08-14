@@ -53,6 +53,8 @@ scripts/update-clang-gcc.sh all        # 或分开: clang / gcc / gcc-riscv
 
 # 2. nsjail 前置（一次性，root）：建 ce-compile/ce-sandbox cgroup + 放开 userns
 sudo scripts/setup-nsjail-cgroups.sh --install-systemd   # 装开机自启，重启不丢
+#    卸载（删掉上述 unit 与 cgroup、还原 sysctl）：
+#    sudo scripts/setup-nsjail-cgroups.sh --uninstall
 
 # 3. 构建并启动
 docker compose build ce
