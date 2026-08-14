@@ -8,6 +8,11 @@ name: ce
 #
 # CE 只发布到宿主机回环 127.0.0.1:10240，由外部 nginx 反代对外
 # （nginx 配置参考见 nginx/ce.conf）。
+#
+# 安全模型 = nsjail 沙箱（策略 B 底座）。注意：nsjail 需要容器放权
+# （SYS_ADMIN/SYS_PTRACE + 放开 seccomp/apparmor + 共享宿主机 cgroup），
+# 真正的隔离由 nsjail 提供，而非容器边界。前置：宿主机先跑一次
+# scripts/setup-nsjail-cgroups.sh（或装 systemd/ce-cgroups.service）。
 # =============================================================================
 
 services:
@@ -20,22 +25,28 @@ services:
     container_name: ce-app
     restart: unless-stopped
 
-    # 非 root（与 Dockerfile 中创建的用户一致）
+    # 非 root（与 Dockerfile 中创建的用户一致）。nsjail 以该 uid 运行并 drop 到 jail 内 uid。
     user: "10001:10001"
 
-    # ---- 容器层加固（策略 A，无 nsjail，可锁到最严）----
-    read_only: true                      # 根文件系统只读
-    cap_drop: ["ALL"]
+    # ---- nsjail 所需放权（容器层不再做硬隔离，隔离由 nsjail 提供）----
+    cap_add:
+      - SYS_ADMIN      # 创建 user/mount/pid/uts/cgroup namespace
+      - SYS_PTRACE     # NsjailSandbox.md 要求
     security_opt:
-      - no-new-privileges:true
+      - seccomp=unconfined    # 放开 unshare/clone/mount/pivot_root
+      - apparmor=unconfined   # 放开 mount（docker-default 会拒）
+    cgroup: host              # 共享宿主机 cgroup 命名空间，nsjail 直接管理 ce-*
+    read_only: true           # 根文件系统只读（nsjail 在新 mount ns 里做挂载，不写容器根；
+                              #  若 CE 报 "Launching child process failed"/mount 错，先改 false 排查）
     tmpfs:
-      # 编译临时目录。只编译不运行 → noexec 可行；大编译给足空间。
-      - /tmp:rw,noexec,nosuid,nodev,size=2g
+      - /tmp:rw,nosuid,nodev,size=2g   # 注意：不能 noexec —— nsjail 内要运行编译器/程序
 
     volumes:
       # 工具链：宿主机目录只读挂载。更新工具链 = 改这里 + restart ce，零镜像重建。
-      # 若目标机开启 SELinux(Enforcing)，给所有挂载追加 ,z（如 :ro,z），否则容器读不到。
+      # 若目标机开启 SELinux(Enforcing)，给挂载追加 ,z（如 :ro,z），否则容器读不到。
       - /srv/ce/compilers:/opt/compiler-explorer:ro
+      # nsjail 需要可写的宿主机 cgroupfs（v2 统一树）来建 ce-compile / ce-sandbox 子组。
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
       # 配置：单文件只读覆盖到 etc/config（保留仓内 defaults，仅叠加 local 覆盖）。
       - ./config/c++.local.properties:/ce/etc/config/c++.local.properties:ro
       - ./config/mlir.local.properties:/ce/etc/config/mlir.local.properties:ro
@@ -47,6 +58,6 @@ services:
       # 若 nginx 在另一台机器，把 127.0.0.1 换成宿主机内网 IP。
       - "127.0.0.1:10240:10240"
 
-    # 资源上限（按 32C/30G 机器给；按需调整）
+    # 资源上限（按 32C/30G 机器给；按需调整）。nsjail 另在 jail 内做更细的内存/CPU 限制。
     mem_limit: 6g
     cpus: 8

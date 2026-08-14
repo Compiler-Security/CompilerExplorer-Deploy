@@ -6,8 +6,10 @@
 - **GCC**（官方预编译，最新版）
 - **自研 MLIR**（你们 Jenkins 每次提交 build，自动发布生效）
 
-实例面向内网，**不加认证、不做 TLS**，但其余全部按公网标准加固
-（容器最严隔离 + 只编译不运行 + 安全响应头 + 限流 + 危险 flag 黑名单）。
+实例面向内网，**不加认证、不做 TLS**，但其余全部按公网标准加固：
+**nsjail 沙箱**包裹编译器/工具执行（CE fork 版），用户程序沙箱配置已就绪；
+外部 nginx 做安全响应头 + 限流；CE 只绑回环不直接对内网开放；危险 flag 黑名单。
+当前默认**只编译 / 看产物，不在线运行**（`supportsExecute=false`），日后改 true 即开。
 
 ## 架构
 
@@ -19,7 +21,8 @@
  │    └─ mlir-custom.<build#>/ ← mlir-custom (符号链接)
  │
  ├─ docker compose
- │    └─ ce  (node, 非 root, 只读根, drop ALL caps) → 127.0.0.1:10240
+ │    └─ ce  (node, 非 root, nsjail 沙箱, 只读根) → 127.0.0.1:10240
+ │         # nsjail 需容器放权: SYS_ADMIN/SYS_PTRACE + 共享宿主机 cgroup
  │
  └─ 外部已有 nginx ── 反代到 127.0.0.1:10240（配置参考 nginx/ce.conf）
 ```
@@ -40,19 +43,26 @@ sudo mkdir -p /srv/ce/compilers
 #   - MLIR:       你们 Jenkins build 产物解压为 mlir-custom.<id>，ln -s 指向 mlir-custom
 #   也可直接用 scripts/update-clang-gcc.sh 自动下载 Clang。
 
-# 2. 构建并启动
+# 2. nsjail 前置（一次性，root）：建 ce-compile/ce-sandbox cgroup + 放开 userns
+sudo scripts/setup-nsjail-cgroups.sh --install-systemd   # 装开机自启，重启不丢
+
+# 3. 构建并启动
 docker compose build ce
 docker compose up -d
 
-# 3. 让外部 nginx 反代到 127.0.0.1:10240
+# 4. 让外部 nginx 反代到 127.0.0.1:10240
 #    把 nginx/ce.conf 复制到其 conf.d/（改 server_name），然后 nginx -s reload
 
-# 4. 验证
+# 5. 验证
 curl http://127.0.0.1:10240/api/compilers   # 直连 CE（应列出 clang/gcc/mlir-opt）
 docker compose logs -f ce
 ```
 
 浏览器访问 `http://<服务器IP>/`，左侧选语言（C++ 或 MLIR）与编译器即可。
+
+> **nsjail 依赖宿主机前置**：`setup-nsjail-cgroups.sh` 创建的两个 cgroup（`ce-compile`/`ce-sandbox`）
+> 重启即失，所以脚本支持 `--install-systemd` 装一个 oneshot unit 持久化。
+> 若漏了这步，CE 一编译就会报 `Launching child process failed`。
 
 ## 三套更新流程
 
@@ -88,7 +98,7 @@ CE 本体手动跑 `update-ce.sh`（或低频定时）即可。
 | `c++.local.properties` | 登记 Clang/GCC（`--gcc-toolchain`、demangler、Intel asm） |
 | `mlir.local.properties` | 登记自研 `mlir-opt` / `mlir-translate`，可加默认 pass |
 | `compiler-explorer.local.properties` | 超时 / 并发 / 输出上限 / 危险 flag 黑名单 |
-| `execution.local.properties` | 沙箱开关（当前策略 A：不执行用户程序） |
+| `execution.local.properties` | nsjail 沙箱开关（编译器 + 用户程序两份 cfg 路径） |
 
 ### 给 MLIR 设默认 pass
 
@@ -108,19 +118,37 @@ compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 
 ## 安全说明（按公网标准，未开认证/TLS）
 
-- **策略 A：只编译 / 看产物，不执行用户程序**（C++ 与 MLIR 均 `supportsExecute=false`）。
-- CE 容器：`read_only` 根文件系统、`cap_drop ALL`、`no-new-privileges`、非 root、`/tmp` 为 `noexec` tmpfs。
+核心是 **nsjail 沙箱**（CE fork 版，`executionType=nsjail` + `sandboxType=nsjail`）：
+
+- **编译器沙箱**（每次编译都进）：jail 内只读挂载 `/bin /lib /usr /opt/compiler-explorer`，
+  cgroup 限制 1.25 GiB 内存 / 72 进程 / 单核 100%，`noexec` tmpfs `/tmp`，无网络。
+- **用户程序沙箱**（仅当开放运行时用到）：更严（200 MiB / 14 进程 / 单核 50% / 无 `/bin`），
+  当前 `supportsExecute=false` 未启用。
+- 容器以非 root 运行、根文件系统只读、`/tmp` 为 tmpfs。
 - 外部 nginx（用 `nginx/ce.conf`）：安全响应头（nosniff / frame / CSP / Referrer-Policy 等）、
   `limit_req` 限流、`client_max_body_size 16m`；CE 只绑回环 `127.0.0.1:10240`，不直接对内网开放。
 - 危险编译选项黑名单：`optionsForbiddenRe=--plugin|-fplugin|--wrapper`。
 - 镜像基于固定版本基底构建；建议纳入常规镜像/依赖漏洞扫描。
 
-**若日后需要在线运行编译产物**（策略 B）：需启用 nsjail 沙箱（CE fork 版），并给容器放权
-（SYS_ADMIN + 放开 seccomp/apparmor + cgroup），详见 `config/execution.local.properties` 注释。
+**权衡（要知道）**：nsjail 需要给容器放权（`SYS_ADMIN`/`SYS_PTRACE` + 放开 seccomp/apparmor +
+共享宿主机 cgroup），所以**真正的隔离由 nsjail 提供，容器边界被有意放宽**——这与官方 godbolt 的
+做法一致。若想在不放权的前提下隔离，可回头用纯容器方案（无 nsjail、不开放运行），见 git 历史首版。
+
+**开放「在线运行」**：把 `config/c++.local.properties` 的 `supportsExecute=false` 改成 `true`，
+再 `docker compose restart ce` 即可——nsjail 用户程序沙箱、宿主机 cgroup 都已就绪，无需其它改动。
 若安全部门日后要求 HTTPS，只需在 nginx 加证书，架构不变。
 
 ## 故障排查
 
+- **一编译就报 `Launching child process failed`**：nsjail 的 cgroup 没建好。
+  确认宿主机跑过 `sudo scripts/setup-nsjail-cgroups.sh`（或 `ce-cgroups.service` 已 enable 且重启后仍在）：
+  `ls -la /sys/fs/cgroup/ce-compile /sys/fs/cgroup/ce-sandbox`，且属主是 uid 10001。
+  也可 `docker compose exec ce /usr/local/bin/nsjail --version` 确认二进制在。
+- **nsjail mount 报 `No such file or directory`**：某个非可选 mount 源在容器里不存在。
+  常见是 `/etc/localtime`（镜像已装 tzdata 兜底）；若是自定义路径，往
+  `etc/nsjail/compilers-and-tools.cfg` 加对应 bind mount（见该 cfg 注释 / 官方 NsjailSandbox.md）。
+- **怀疑容器放权/只读根导致 nsjail 失败**：临时把 `docker-compose.yml` 里 `read_only` 改 `false` 定位；
+  仍不行就加 `privileged: true` 试（官方文档的兜底），定位后再收紧。
 - **目标机开了 SELinux（Enforcing）**：容器读不到挂载的配置/工具链（日志报 Permission denied）。
   给 `docker-compose.yml` 里所有 bind mount 追加 `,z`（如 `:ro,z`），
   或执行 `sudo semanage fcontext -a -t container_file_t "/srv/ce/compilers(/.*)?" && sudo restorecon -R /srv/ce/compilers`。
@@ -130,6 +158,4 @@ compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 - **编译报找不到 libstdc++/启动文件**：检查 `c++.local.properties` 的
   `--gcc-toolchain=/opt/compiler-explorer/gcc-latest` 是否指向有效 GCC。
 - **MLIR fork 起不来**：多半缺运行库 → 设 `compiler.myopt.ldPath`（见上）。
-- **CE 启动失败且怀疑只读根**：看日志里报的只读写路径，给它加一个 tmpfs；
-  或临时把 `ce` 服务的 `read_only: true` 去掉定位后再加回。
 - **改配置不生效**：确认改的是 `config/*.local.properties`，且已 `docker compose restart ce`。
