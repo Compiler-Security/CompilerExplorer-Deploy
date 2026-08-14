@@ -1,0 +1,45 @@
+name: ce-vm
+
+# =============================================================================
+# 外层（跑在共享宿主机上）：只在 Docker 里起一个 QEMU/KVM VM，CE 栈跑在 VM 内。
+#   共享宿主机的唯一改动 = 这个容器 + /dev/kvm；cgroup/AppArmor/userns 一律不动。
+#
+#   用法:
+#     cp .env.example .env        # 填 CE_COMPILERS_ROOT（宿主机工具链根，供 9p 共享进 VM）
+#     docker compose -f docker-compose.vm.yml build qemu
+#     docker compose -f docker-compose.vm.yml up -d
+#   外部 nginx 反代到 127.0.0.1:10240（与裸机版一致，见 nginx/ce.conf）。
+#
+#   链路: 外部 nginx -> 宿主机 127.0.0.1:10240 -> qemu 容器 ->(hostfwd)-> VM 的 CE。
+# =============================================================================
+
+services:
+  qemu:
+    build: ./vm
+    image: ssct/ce-qemu:local
+    container_name: ce-vm
+    restart: unless-stopped
+
+    # 唯一需要的硬件访问：KVM。user-mode 网络（slirp）不需要 NET_ADMIN。
+    devices:
+      - /dev/kvm:/dev/kvm
+
+    environment:
+      VM_CPUS: "${VM_CPUS:-8}"
+      VM_MEM_MB: "${VM_MEM_MB:-8192}"
+      VM_DISK_SIZE: "${VM_DISK_SIZE:-40G}"
+      FWD_PORT: "10240"
+      COMPILERS_SRC: /share/compilers
+      REPO_SRC: /share/repo
+
+    volumes:
+      - vm-disk:/vm/disk                                   # VM 磁盘持久化
+      - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT}:/share/compilers:ro"  # 工具链 -> 9p 进 VM
+      - ./:/share/repo:ro                                  # 本仓库 -> 9p 进 VM
+
+    ports:
+      # 对外仍只绑回环，由外部 nginx 反代。
+      - "127.0.0.1:10240:10240"
+
+volumes:
+  vm-disk:

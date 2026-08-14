@@ -1,0 +1,28 @@
+#cloud-config
+# CompilerExplorer 隔离 VM 的首启装配（cloud-init, 仅实例首次启动执行一次）。
+# 依赖 QEMU 通过 9p 共享进来的两个目录：
+#   mount_tag=compilers -> 宿主机工具链根（只读）
+#   mount_tag=cerepo    -> 本仓库（只读；拷到可写副本后再跑）
+# VM 是专用的，内层 CE 用普通 docker(runc) + 最小权限容器即可（隔离由 VM 边界提供，
+# 无需 nsjail，也无需任何 cgroup/userns 前置）。
+hostname: ce-vm
+preserve_hostname: false
+
+package_update: true
+packages:
+  - docker.io            # docker 引擎 + `docker compose`(v2)
+  - docker-compose-v2
+  - curl
+
+runcmd:
+  # 1) 挂 9p 共享（只读）
+  - mkdir -p /opt/compiler-explorer /mnt/ce-repo-src /srv/ce-repo
+  - mount -t 9p -o trans=virtio,version=9p2000.L,ro compilers /opt/compiler-explorer
+  - mount -t 9p -o trans=virtio,version=9p2000.L,ro cerepo /mnt/ce-repo-src
+
+  # 2) 拷一份可写仓库副本，写 VM 侧 .env（工具链指向 9p 挂载点；CE 绑 0.0.0.0 以接 hostfwd）
+  - cp -a /mnt/ce-repo-src/. /srv/ce-repo/
+  - printf 'CE_COMPILERS_ROOT=/opt/compiler-explorer\nCE_BIND_ADDR=0.0.0.0\n' > /srv/ce-repo/.env
+
+  # 3) 起 CE（首次会在 VM 内构建镜像，较慢；之后复用）
+  - cd /srv/ce-repo && docker compose up -d

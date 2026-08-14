@@ -6,12 +6,13 @@ name: ce
 #   docker compose restart ce     # 工具链或配置更新后重启 CE 生效
 #   docker compose build ce && docker compose up -d   # 更新 CE 本体
 #
-# 隔离模型 = Kata VM：ce 服务用 runtime:kata 跑在一个轻量 VM 里（独立内核、
-# hypervisor 硬边界），因此容器内无需 nsjail，也无需 SYS_ADMIN / 共享 cgroup。
-# 前提：宿主机装好 Kata 并注册进 dockerd（见 scripts/setup-kata.sh）。
+# 本文件 = 跑在 QEMU/KVM VM 内部（由 docker-compose.vm.yml 起的 VM）的 CE 栈，
+# 用普通 docker(runc) + 最小权限容器。隔离由 VM 边界提供，容器内无需 nsjail，
+# 也无需 SYS_ADMIN / 共享 cgroup。（若在装了 Kata 的专用机上直跑，可给 ce 加
+# 一行 `runtime: kata`，见 scripts/setup-kata.sh 与 README。）
 #
-# CE 只发布到宿主机回环 ${CE_BIND_ADDR:-127.0.0.1}:10240，由外部 nginx 反代对外
-# （nginx 配置参考见 nginx/ce.conf）。
+# CE 只发布到 ${CE_BIND_ADDR:-127.0.0.1}:10240；VM 内经 QEMU hostfwd 暴露给宿主机回环，
+# 再由外部 nginx 反代对外（nginx 配置参考见 nginx/ce.conf）。
 # =============================================================================
 
 services:
@@ -23,9 +24,6 @@ services:
     image: ssct/compiler-explorer:local
     container_name: ce-app
     restart: unless-stopped
-
-    # 用 Kata 把这个容器跑在一个轻量 VM 里（需在 dockerd 注册名为 kata 的 runtime）。
-    runtime: kata
 
     # 非 root（与 Dockerfile 中创建的用户一致）。
     user: "10001:10001"
@@ -55,6 +53,7 @@ services:
       # 若 nginx 在另一台机器，把 127.0.0.1 换成宿主机内网 IP（.env 里 CE_BIND_ADDR）。
       - "${CE_BIND_ADDR:-127.0.0.1}:10240:10240"
 
-    # 资源上限（Kata 下对应 VM 的 CPU/内存规格；按 32C/30G 机器给，按需调整）。
+    # 资源上限（按 32C/30G 机器给，按需调整）。无 nsjail 时容器进程不迁移，
+    # 这两个限制 + pids_limit 对所有编译进程都生效。
     mem_limit: 6g
     cpus: 8
