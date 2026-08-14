@@ -20,7 +20,7 @@ NODE_SHA256="${NODE_SHA256:-}"
 COMPILERS_SRC="${COMPILERS_SRC:?需指定工具链目录(容器内路径)}"
 REPO_SRC="${REPO_SRC:?需指定仓库目录(容器内路径)}"
 FWD_PORT="${FWD_PORT:-10240}"
-SSH_FWD_PORT="${SSH_FWD_PORT:-2222}"
+SSH_FWD_PORT="${SSH_FWD_PORT:-2223}"
 SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-/vm/ssh/ce_vm_key.pub}"
 
 DISK_DIR=/vm/disk

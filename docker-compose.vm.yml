@@ -24,7 +24,7 @@ services:
       NODE_VERSION: "${NODE_VERSION:-}"
       NODE_SHA256: "${NODE_SHA256:-}"
       FWD_PORT: "10240"
-      SSH_FWD_PORT: "2222"
+      SSH_FWD_PORT: "${CE_VM_SSH_PORT:-2223}"
       COMPILERS_SRC: /share/compilers
       REPO_SRC: /share/repo
       SSH_PUBKEY_FILE: /share/sshpub/ce_vm_key.pub
@@ -37,7 +37,7 @@ services:
 
     ports:
       - "127.0.0.1:10240:10240"
-      - "127.0.0.1:2222:2222"
+      - "127.0.0.1:${CE_VM_SSH_PORT:-2223}:${CE_VM_SSH_PORT:-2223}"
 
     stop_grace_period: 40s
 

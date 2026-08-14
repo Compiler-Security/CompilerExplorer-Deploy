@@ -13,7 +13,7 @@
 │  └─ QEMU/KVM VM
 │     └─ CE + systemd + nsjail
 └─ nginx → 127.0.0.1:10240 → VM:10240
-             127.0.0.1:2222 → VM:22（可选管理通道）
+             127.0.0.1:2223 → VM:22（可选管理通道）
 ```
 
 部署机必须提供 `/dev/kvm`；若部署机本身是 VM，需要启用嵌套虚拟化。
@@ -54,7 +54,7 @@ curl http://127.0.0.1:10240/api/compilers
 工具链通过相对软链和 9p 共享立即生效。若 `.env` 配置了 `CE_VM_SSH_KEY`，更新脚本会 best-effort 重启 CE 以清理缓存；未配置时可手动执行：
 
 ```bash
-ssh -i <private-key> -p 2222 ce@127.0.0.1 \
+ssh -i <private-key> -p 2223 ce@127.0.0.1 \
   'sudo systemctl restart ce.service'
 ```
 

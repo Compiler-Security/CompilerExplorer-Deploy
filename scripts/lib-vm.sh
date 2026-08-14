@@ -4,7 +4,7 @@ restart_ce_in_vm() {
   local key="${CE_VM_SSH_KEY:-}"
   if [[ -n "${key}" && -f "${key}" ]]; then
     echo ">> SSH 进 VM 重启 CE（清缓存）"
-    if ssh -i "${key}" -p "${CE_VM_SSH_PORT:-2222}" \
+    if ssh -i "${key}" -p "${CE_VM_SSH_PORT:-2223}" \
            -o BatchMode=yes -o ConnectTimeout=8 -o IdentitiesOnly=yes -o LogLevel=ERROR \
            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
            ce@127.0.0.1 'sudo systemctl restart ce.service'; then
