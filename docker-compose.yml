@@ -6,16 +6,12 @@ name: ce
 #   docker compose restart ce     # 工具链或配置更新后重启 CE 生效
 #   docker compose build ce && docker compose up -d   # 更新 CE 本体
 #
-# CE 只发布到宿主机回环 127.0.0.1:10240，由外部 nginx 反代对外
+# 隔离模型 = Kata VM：ce 服务用 runtime:kata 跑在一个轻量 VM 里（独立内核、
+# hypervisor 硬边界），因此容器内无需 nsjail，也无需 SYS_ADMIN / 共享 cgroup。
+# 前提：宿主机装好 Kata 并注册进 dockerd（见 scripts/setup-kata.sh）。
+#
+# CE 只发布到宿主机回环 ${CE_BIND_ADDR:-127.0.0.1}:10240，由外部 nginx 反代对外
 # （nginx 配置参考见 nginx/ce.conf）。
-#
-# 安全模型 = nsjail 沙箱（策略 B 底座，共享机委派版）。注意：nsjail 需要容器放权
-# （SYS_ADMIN/SYS_PTRACE + 放开 seccomp/apparmor + 共享宿主机 cgroup），
-# 真正的隔离由 nsjail 提供，而非容器边界。
-#
-# 共享机要点：cgroup 用「委派子树」/sys/fs/cgroup/ce，容器经 cgroup_parent 落进该
-# 子树，**不碰根 cgroup.procs** → 不影响其它租户。前置：宿主机先跑一次
-# scripts/setup-nsjail-cgroups.sh（或装 ce-cgroups.service）。
 # =============================================================================
 
 services:
@@ -28,47 +24,37 @@ services:
     container_name: ce-app
     restart: unless-stopped
 
-    # 非 root（与 Dockerfile 中创建的用户一致）。nsjail 以该 uid 运行并 drop 到 jail 内 uid。
+    # 用 Kata 把这个容器跑在一个轻量 VM 里（需在 dockerd 注册名为 kata 的 runtime）。
+    runtime: kata
+
+    # 非 root（与 Dockerfile 中创建的用户一致）。
     user: "10001:10001"
 
-    # ---- nsjail 所需放权（容器层不再做硬隔离，隔离由 nsjail 提供）----
-    cap_add:
-      - SYS_ADMIN      # 创建 user/mount/pid/uts/cgroup namespace
-      - SYS_PTRACE     # NsjailSandbox.md 要求
+    # ---- 最小权限（隔离由 Kata VM 提供，容器自身收紧到最严）----
+    cap_drop: ["ALL"]
     security_opt:
-      - seccomp=unconfined    # 放开 unshare/clone/mount/pivot_root
-      - apparmor=unconfined   # 放开 mount（docker-default 会拒）
-    cgroup: host              # 共享宿主机 cgroup 命名空间（nsjail 在委派子树 /ce 内建 jail 组）
-    # 把容器放进委派子树 /sys/fs/cgroup/ce，使迁移的公共祖先是 /ce（uid 可写），
-    # 从而无需碰根 cgroup.procs。**上机必验**：docker 用 systemd cgroup 驱动时，
-    # 该值可能要写成 slice 形式（见 README「共享机 cgroup 委派」）。
-    cgroup_parent: "/ce"
-    read_only: true           # 根文件系统只读（nsjail 在新 mount ns 里做挂载，不写容器根；
-                              #  若 CE 报 "Launching child process failed"/mount 错，先改 false 排查）
+      - no-new-privileges:true
+    read_only: true                      # 根文件系统只读
     tmpfs:
-      - /tmp:rw,nosuid,nodev,size=2g   # 注意：不能 noexec —— nsjail 内要运行编译器/程序
+      - /tmp:rw,noexec,nosuid,nodev,size=2g   # 只编译 → 编译产物不用执行，noexec 可行
+    pids_limit: 2048                     # 无 nsjail 的 per-compile cgroup, 容器级挡 fork 炸弹
 
     volumes:
       # 工具链：宿主机目录只读挂载。路径来自 .env 的 CE_COMPILERS_ROOT（compose 自动读取 .env）。
       # 更新工具链 = 改 CE_COMPILERS_ROOT 指向的目录 + restart ce，零镜像重建。
       # 若目标机开启 SELinux(Enforcing)，给挂载追加 ,z（如 :ro,z），否则容器读不到。
       - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT（cp .env.example .env 后改实际路径）}:/opt/compiler-explorer:ro"
-      # nsjail 需要可写的宿主机 cgroupfs，但只在委派子树 /ce 内有写权（其余 root 所有，写不动）。
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
       # 配置：单文件只读覆盖到 etc/config（保留仓内 defaults，仅叠加 local 覆盖）。
       - ./config/c++.local.properties:/ce/etc/config/c++.local.properties:ro
       - ./config/mlir.local.properties:/ce/etc/config/mlir.local.properties:ro
       - ./config/compiler-explorer.local.properties:/ce/etc/config/compiler-explorer.local.properties:ro
       - ./config/execution.local.properties:/ce/etc/config/execution.local.properties:ro
-      # 委派版 nsjail 沙箱配置：基于官方 cfg，仅把 cgroupv2_mount 指到 /ce 子树。
-      - ./config/nsjail/compilers-and-tools.cfg:/ce/etc/nsjail/compilers-and-tools.cfg:ro
-      - ./config/nsjail/user-execution.cfg:/ce/etc/nsjail/user-execution.cfg:ro
 
     ports:
-      # 只绑定回环：对外只经外部 nginx 暴露，CE 不直接对内网开放。
-      # 若 nginx 在另一台机器，把 127.0.0.1 换成宿主机内网 IP。
-      - "127.0.0.1:10240:10240"
+      # 默认只绑回环：对外只经外部 nginx 暴露，CE 不直接对内网开放。
+      # 若 nginx 在另一台机器，把 127.0.0.1 换成宿主机内网 IP（.env 里 CE_BIND_ADDR）。
+      - "${CE_BIND_ADDR:-127.0.0.1}:10240:10240"
 
-    # 资源上限（按 32C/30G 机器给；按需调整）。nsjail 另在 jail 内做更细的内存/CPU 限制。
+    # 资源上限（Kata 下对应 VM 的 CPU/内存规格；按 32C/30G 机器给，按需调整）。
     mem_limit: 6g
     cpus: 8
