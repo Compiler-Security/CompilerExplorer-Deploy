@@ -1,25 +1,18 @@
 #!/usr/bin/env bash
-# =============================================================================
-# update-ce.sh —— 升级 CompilerExplorer 本体（CE 跑在 QEMU VM 内）。
-#
-#   用法:
-#     update-ce.sh gh-18910        # 升级到指定 CE release tag
-#
-#   机制：把 .env 里的 CE_REF 改成新 tag，再 force-recreate qemu 容器。
-#   VM 的 entrypoint 检测到 CE_REF 变化会重建 VM 磁盘（保留已缓存的云镜像底包，
-#   不重下），cloud-init 随即按新 tag 重新装配 CE。期间 CE 有几分钟停机。
-#
-#   查看可用 tag: https://github.com/compiler-explorer/compiler-explorer/tags
-# =============================================================================
+# 更新 .env 的 CE_REF 并重建 QEMU overlay；用法：update-ce.sh gh-18910
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 NEW_REF="${1:?用法: update-ce.sh <ce-tag>  (如 gh-18910)}"
+[[ "${NEW_REF}" =~ ^gh-[0-9]+$ ]] \
+  || { echo "错误: CE tag 格式应为 gh-<数字>（例如 gh-18910）。" >&2; exit 2; }
+[[ -f .env ]] \
+  || { echo "错误: 缺少 .env；请先 cp .env.example .env 并填写 CE_COMPILERS_ROOT。" >&2; exit 1; }
+grep -qE '^CE_COMPILERS_ROOT=.+$' .env \
+  || { echo "错误: .env 未设置 CE_COMPILERS_ROOT。" >&2; exit 1; }
 
-# 写 .env 的 CE_REF（没有这条就追加）
-touch .env
 if grep -q '^CE_REF=' .env; then
   sed -i -E "s/^CE_REF=.*/CE_REF=${NEW_REF}/" .env
 else
@@ -37,6 +30,6 @@ cat <<EOF
 >> 装配完成后验证:
      curl http://127.0.0.1:10240/api/version
 
->> 提示：CE_REF 没变也想强制重新装配（改配置 / 加 SSH 公钥 / 上次装配失败恢复）：
-     FORCE_REPROVISION=1 docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
+>> 提示：CE_REF 没变也想强制重新装配（加 SSH 公钥 / 上次装配失败恢复）：
+     FORCE_REPROVISION="\$(date +%s%N)" docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
 EOF

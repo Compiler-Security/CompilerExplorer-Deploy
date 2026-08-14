@@ -1,20 +1,6 @@
 name: ce-vm
 
-# =============================================================================
-# 外层（跑在共享宿主机上）：只在 Docker 里起一个 QEMU/KVM VM，CE 直接跑在 VM 内
-# （node + systemd + nsjail，无内层 docker）。
-#   共享宿主机的唯一改动 = 这个容器 + /dev/kvm；cgroup/AppArmor/userns 一律不动。
-#
-#   用法:
-#     cp .env.example .env        # 填 CE_COMPILERS_ROOT（+ 可选 CE_REF / CE_VM_SSH_PUBKEY）
-#     docker compose -f docker-compose.vm.yml build qemu
-#     docker compose -f docker-compose.vm.yml up -d
-#   外部 nginx 反代到 127.0.0.1:10240（见 nginx/ce.conf）。
-#
-#   链路:
-#     CE  : 外部 nginx -> 宿主 127.0.0.1:10240 -> qemu ->(hostfwd)-> VM:10240
-#     SSH : 宿主 127.0.0.1:2222 ->(hostfwd)-> VM:22  （用于工具链更新后重启 CE 清缓存）
-# =============================================================================
+# 主路径：Docker 只运行 QEMU/KVM，CE 在 VM 内由 systemd + nsjail 运行。
 
 services:
   qemu:
@@ -23,7 +9,6 @@ services:
     container_name: ce-vm
     restart: unless-stopped
 
-    # 唯一需要的硬件访问：KVM。user-mode 网络（slirp）不需要 NET_ADMIN。
     devices:
       - /dev/kvm:/dev/kvm
 
@@ -33,9 +18,11 @@ services:
       VM_DISK_SIZE: "${VM_DISK_SIZE:-40G}"
       VM_IMAGE_URL: "${VM_IMAGE_URL:-}"
       VM_IMAGE_SHA256: "${VM_IMAGE_SHA256:-}"
-      FORCE_REPROVISION: "${FORCE_REPROVISION:-0}"   # =1 重建 VM 磁盘（装配失败恢复/改配置/加公钥）
-      CE_REF: "${CE_REF:-gh-18904}"          # CE 版本；改了会触发 VM 重新装配
-      NODE_VERSION: "${NODE_VERSION:-}"       # 空则取 nodejs 最新 v22
+      VM_IMAGE_SHA256_URL: "${VM_IMAGE_SHA256_URL:-}"
+      FORCE_REPROVISION: "${FORCE_REPROVISION:-0}"
+      CE_REF: "${CE_REF:-gh-18904}"
+      NODE_VERSION: "${NODE_VERSION:-}"
+      NODE_SHA256: "${NODE_SHA256:-}"
       FWD_PORT: "10240"
       SSH_FWD_PORT: "2222"
       COMPILERS_SRC: /share/compilers
@@ -43,21 +30,31 @@ services:
       SSH_PUBKEY_FILE: /share/sshpub/ce_vm_key.pub
 
     volumes:
-      - vm-disk:/vm/disk                                   # VM 磁盘持久化（含缓存的云镜像底包）
-      - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT}:/share/compilers:ro"  # 工具链 -> 9p 进 VM
-      - ./:/share/repo:ro                                  # 本仓库 -> 9p 进 VM
-      # 可选：把一个宿主 SSH 公钥挂进来，用于进 VM 管理 CE（重启清缓存）。
-      # 在 .env 设 CE_VM_SSH_PUBKEY 指向宿主上的 .pub 文件。
+      - vm-disk:/vm/disk
+      - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT}:/share/compilers:ro"
+      - ./:/share/repo:ro
       - "${CE_VM_SSH_PUBKEY:-/dev/null}:/share/sshpub/ce_vm_key.pub:ro"
 
     ports:
-      # 对外仍只绑回环，由外部 nginx 反代。
       - "127.0.0.1:10240:10240"
-      # SSH 进 VM（管理 CE），也只绑回环。
       - "127.0.0.1:2222:2222"
 
-    # 外层 qemu 容器自身的资源上限（在 VM 规格之上留点余量给 qemu 进程开销）。
-    # 注意这是容器级限制，VM 内部再被 -m/-smp 限制一次。
+    stop_grace_period: 40s
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:10240/healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15m
+      retries: 3
+
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m,uid=0,gid=0,mode=1777
+
     mem_limit: "${QEMU_MEM_LIMIT:-10g}"
     cpus: "${QEMU_CPUS:-10}"
     pids_limit: 512

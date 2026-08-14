@@ -1,38 +1,15 @@
 #!/usr/bin/env bash
-# =============================================================================
-# update-clang-gcc.sh —— 下载预编译 Clang/GCC 到宿主机工具链根，
-#   并拨动 *-latest 符号链接 + 重启 CE。
-#
-#   用法:
-#     update-clang-gcc.sh clang          # 最新 Clang/LLVM (x86 宿主, 全后端含 RISC-V)
-#     update-clang-gcc.sh gcc            # 最新 GCC, x86_64 原生
-#     update-clang-gcc.sh gcc-riscv      # 最新 GCC, riscv64 交叉
-#     update-clang-gcc.sh all            # clang + 两种 gcc
-#
-# 幂等：重复调用时若远端资产未变化则不重新下载（只确认/修复符号链接）：
-#   * Clang 以 release tag 作版本目录（clang-22.1.8），tag 不可变。
-#   * GCC 用 HEAD 请求取资产 Last-Modified 作内容标识（不下载正文）。
-#
-# 来源（都可用环境变量覆盖成内部镜像）：
-#   * Clang/LLVM：官方 llvm-project GitHub Release 的 Linux-X64 tarball，
-#       默认启用全部后端（含 RISC-V），同一份 clang 加 --target 即可交叉。
-#   * GCC：gcc.gnu.org 只发源码。默认用 prepkg/gcc-toolchain（GCC 最新,
-#       glibc 2.17 基线 → 能在 Debian bookworm 容器里跑, 可重定位, 解压即用）。
-#
-# 注意 prepkg 是「交叉式」布局：二进制带三元组前缀（<dest>/bin/<triple>-g++）。
-# =============================================================================
+# 幂等更新预编译 Clang/GCC 并原子切换 *-latest 软链。
+# 用法：update-clang-gcc.sh {clang|gcc|gcc-riscv|all}
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_DIR="${REPO_ROOT}"
-# 工具链根：环境变量优先；否则读仓库根 .env；再不行报错。
 if [[ -z "${CE_COMPILERS_ROOT:-}" && -f "${REPO_ROOT}/.env" ]]; then
   set -a; # shellcheck disable=SC1091
   source "${REPO_ROOT}/.env"; set +a
 fi
 : "${CE_COMPILERS_ROOT:?未设置 CE_COMPILERS_ROOT。请 cp .env.example .env 并填入实际路径，或用环境变量传入。}"
 
-# 安全护栏（最小爆炸半径）：规范化并拒绝空/根等危险工具链根，防止后续 rm -rf 误伤。
 CE_COMPILERS_ROOT="$(readlink -m "${CE_COMPILERS_ROOT}")"
 if [[ -z "${CE_COMPILERS_ROOT}" || "${CE_COMPILERS_ROOT}" == "/" ]]; then
   echo "错误: CE_COMPILERS_ROOT 为空或为根目录，已拒绝（防止 rm -rf 误删）。" >&2
@@ -40,47 +17,57 @@ if [[ -z "${CE_COMPILERS_ROOT}" || "${CE_COMPILERS_ROOT}" == "/" ]]; then
 fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "${WORK}"' EXIT
+PARTIAL=""
+cleanup() {
+  [[ -z "${PARTIAL}" ]] || rm -rf -- "${PARTIAL}"
+  rm -rf -- "${WORK}"
+}
+trap cleanup EXIT
 
 mkdir -p "${CE_COMPILERS_ROOT}"
+command -v flock >/dev/null 2>&1 \
+  || { echo "错误: 缺少 flock（通常由 util-linux 提供），无法安全串行更新工具链。" >&2; exit 1; }
+exec 9>"${CE_COMPILERS_ROOT}/.update.lock"
+flock 9
 
-# ---- 可配置来源（留空则用默认）-----------------------------------------------
-CLANG_TARBALL_URL="${CLANG_TARBALL_URL:-}"                 # 默认: 自动取最新 LLVM release
-GCC_TARBALL_URL="${GCC_TARBALL_URL:-}"                     # 默认: prepkg x86_64
-GCC_RISCV_TARBALL_URL="${GCC_RISCV_TARBALL_URL:-}"         # 默认: prepkg riscv64
+CLANG_TARBALL_URL="${CLANG_TARBALL_URL:-}"
+GCC_TARBALL_URL="${GCC_TARBALL_URL:-}"
+GCC_RISCV_TARBALL_URL="${GCC_RISCV_TARBALL_URL:-}"
 PREPKG_BASE="https://github.com/prepkg/gcc-toolchain/releases/latest/download"
 
-# ---- 完整性校验（供应链安全）---------------------------------------------------
-# 可选：把官方/核对过的 SHA256 钉在下面变量里（或 .env），每次下载强制比对，
-# 不符即中止 —— 防止公网二进制被篡改。留空则只打印实际哈希供你核对后钉死。
-#   首次拿到哈希的方式：先留空跑一次，记下打印的 SHA256，再填回来。
-LLVM_SHA256="${LLVM_SHA256:-}"            # 对应 clang 包
-GCC_SHA256="${GCC_SHA256:-}"              # 对应 gcc x86_64 包
-GCC_RISCV_SHA256="${GCC_RISCV_SHA256:-}"  # 对应 gcc riscv64 包
+LLVM_SHA256="${LLVM_SHA256:-}"
+GCC_SHA256="${GCC_SHA256:-}"
+GCC_RISCV_SHA256="${GCC_RISCV_SHA256:-}"
+for checksum in "${LLVM_SHA256}" "${GCC_SHA256}" "${GCC_RISCV_SHA256}"; do
+  [[ -z "${checksum}" || "${checksum}" =~ ^[[:xdigit:]]{64}$ ]] \
+    || { echo "错误: 工具链 SHA256 必须是 64 位十六进制。" >&2; exit 2; }
+done
+LLVM_SHA256="${LLVM_SHA256,,}"
+GCC_SHA256="${GCC_SHA256,,}"
+GCC_RISCV_SHA256="${GCC_RISCV_SHA256,,}"
 
-DID_CHANGE=0   # 是否有实际下载/换链接；用于决定要不要重启 CE
+DID_CHANGE=0
 
-# 共享「进 VM 重启 CE」帮助函数（best-effort 清缓存）。
 # shellcheck source=lib-vm.sh
 source "${REPO_ROOT}/scripts/lib-vm.sh"
-restart_ce() { restart_ce_in_vm; }
 
-# 原子拨链接
 point_link() { # point_link <link-name> <target-dir>
-  local link="${CE_COMPILERS_ROOT}/$1" target="$2"
-  ln -sfn "${target}" "${CE_COMPILERS_ROOT}/.$1.tmp"
-  mv -T "${CE_COMPILERS_ROOT}/.$1.tmp" "${link}"
-  echo ">> $1 -> ${target}"
+  local name="$1" link="${CE_COMPILERS_ROOT}/$1" target="$2" target_name tmp
+  target_name="$(basename "${target}")"
+  [[ "$(dirname "${target}")" == "${CE_COMPILERS_ROOT}" ]] \
+    || { echo "错误: 软链目标不在 CE_COMPILERS_ROOT 内: ${target}" >&2; exit 1; }
+  tmp="${CE_COMPILERS_ROOT}/.${name}.tmp.$$"
+  ln -s "${target_name}" "${tmp}"
+  mv -Tf "${tmp}" "${link}"
+  echo ">> ${name} -> ${target_name}"
 }
 
-# install_tarball <url> <dest> [expected_sha256] [sig_url]
-#   下载 -> 校验完整性 -> 解压并 strip 顶层目录。
+# 下载、校验并去掉 tarball 顶层目录。
 install_tarball() {
   local url="$1" dest="$2" expect_sha="${3:-}" sig_url="${4:-}"
   echo ">> 下载 ${url}"
   curl -fSL --retry 3 -o "${WORK}/pkg.tar" "${url}"
 
-  # ---- 完整性校验（在解压前）----
   local actual_sha
   actual_sha="$(sha256sum "${WORK}/pkg.tar" | awk '{print $1}')"
   if [[ -n "${expect_sha}" ]]; then
@@ -95,7 +82,7 @@ install_tarball() {
   else
     echo ">> 未固定 SHA256。本次下载哈希: ${actual_sha}"
     echo ">>   （可把它写进 .env 对应变量钉死，之后每次下载都会强制比对）"
-    # LLVM 提供 GPG 签名：有 gpg 时做一次验签（best-effort，不静默放过）。
+    # 未固定哈希时，LLVM 包尽量再验证发布签名。
     if [[ -n "${sig_url}" ]]; then
       if command -v gpg >/dev/null 2>&1; then
         if curl -fsSL -o "${WORK}/pkg.sig" "${sig_url}" \
@@ -110,24 +97,28 @@ install_tarball() {
     fi
   fi
 
-  rm -rf -- "${dest}.partial"
-  mkdir -p "${dest}.partial"
-  tar -xf "${WORK}/pkg.tar" -C "${dest}.partial" --strip-components=1
-  mv -T "${dest}.partial" "${dest}"
-  # SELinux (Enforcing) 下打容器可读标签，确保 CE 容器能读到新工具链。
+  PARTIAL="${CE_COMPILERS_ROOT}/.$(basename "${dest}").partial.$$"
+  rm -rf -- "${PARTIAL}"
+  mkdir -p "${PARTIAL}"
+  tar -xf "${WORK}/pkg.tar" -C "${PARTIAL}" --strip-components=1
+  # 目标名由脚本生成且限定在工具链根的直接子目录。
+  [[ ! -e "${dest}" ]] || rm -rf -- "${dest}"
+  mv -T "${PARTIAL}" "${dest}"
+  PARTIAL=""
   if command -v chcon >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" == "Enforcing" ]]; then
     chcon -R -t container_file_t "${dest}" || true
   fi
 }
 
-# install_versioned <link> <dirbase> <version-id> <url> <exe-relpath> [expected_sha256] [sig_url]
-# 幂等核心：目标目录 <dirbase>-<version-id> 已存在且二进制可用 → 不重新下载。
+# 已安装且二进制可用时只检查/修复软链。
 install_versioned() {
   local link="$1" dirbase="$2" verid="$3" url="$4" exe="$5" expect_sha="${6:-}" sig_url="${7:-}"
+  verid="${verid//[^A-Za-z0-9._-]/_}"
+  [[ -n "${verid}" ]] || { echo "错误: 无法从下载地址得到安全的版本标识" >&2; exit 1; }
   local dest="${CE_COMPILERS_ROOT}/${dirbase}-${verid}"
 
   if [[ -x "${dest}/${exe}" ]]; then
-    if [[ "$(readlink -f "${CE_COMPILERS_ROOT}/${link}" 2>/dev/null || true)" == "$(readlink -f "${dest}")" ]]; then
+    if [[ "$(readlink "${CE_COMPILERS_ROOT}/${link}" 2>/dev/null || true)" == "$(basename "${dest}")" ]]; then
       echo ">> [跳过] ${dirbase} 已是 ${verid}，${link} 已指向它 —— 不重复下载"
       return 0
     fi
@@ -150,14 +141,12 @@ update_clang() {
   if [[ -z "${url}" ]]; then
     echo ">> 查询最新 LLVM release ..."
     local json tag
-    # 先完整取回响应再解析 —— 不要 curl 边下边接 grep -m1/head（提前关闭管道会让
-    # curl 触发 SIGPIPE 报 (23)，在 pipefail 下直接中断脚本）。
+    # 先完整取回，避免 pipefail 下 curl 被下游提前关闭。
     json="$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest)"
     tag="$(printf '%s\n' "${json}" | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
     tag="${tag%%$'\n'*}"
     [[ -n "${tag}" ]] || { echo "错误: 解析不到 LLVM 最新 tag（可能 API 限流/网络问题）；可手动设 CLANG_TARBALL_URL"; exit 1; }
     verid="${tag#llvmorg-}"
-    # 从 release 资产里挑 Linux 预编译 tarball（资产名随版本会变，故不硬编码）。
     url="$(printf '%s\n' "${json}" \
            | grep -oE 'https://[^"]*(Linux-X64|clang\+llvm[^"]*[Ll]inux[^"]*(x86_64|X64))[^"]*\.tar\.xz' \
            || true)"
@@ -165,13 +154,12 @@ update_clang() {
     [[ -n "${url}" ]] || { echo "错误: ${tag} 下找不到 Linux 预编译包；请手动设 CLANG_TARBALL_URL"; exit 1; }
     echo ">> 最新 LLVM: ${tag}"
   else
-    # 自定义 URL：用文件名作版本标识（尽力而为）。
     verid="$(basename "${url}")"; verid="${verid%.tar.xz}"; verid="${verid%.tar.gz}"
   fi
   install_versioned clang-latest clang "${verid}" "${url}" "bin/clang++" "${LLVM_SHA256}" "${url}.sig"
 }
 
-# gcc_version_id <triple> —— 用 HEAD 的 Last-Modified 作资产内容标识（不下载正文）。
+# 用 HEAD 的 Last-Modified 标识 prepkg latest 资产。
 gcc_version_id() {
   local triple="$1" hdrs lm
   hdrs="$(curl -fsSIL --retry 3 "${PREPKG_BASE}/gcc-${triple}.tar.gz")"
@@ -191,7 +179,6 @@ update_gcc() { # update_gcc <triple> <link-name> <url-override> <sha256-pin>
     echo ">> 检查 gcc-${triple} 最新资产版本 ..."
     verid="$(gcc_version_id "${triple}")"
   fi
-  # prepkg 不发布校验文件，只能靠钉住的 SHA256 做完整性校验（无签名可验）。
   install_versioned "${link}" "gcc-${triple}" "${verid}" "${url}" "bin/${triple}-g++" "${pin}" ""
 }
 
@@ -208,7 +195,7 @@ case "${1:-all}" in
 esac
 
 if [[ "${DID_CHANGE}" == "1" ]]; then
-  restart_ce
+  restart_ce_in_vm
 else
   echo ">> 所有工具链均已是最新，无需重启 CE"
 fi

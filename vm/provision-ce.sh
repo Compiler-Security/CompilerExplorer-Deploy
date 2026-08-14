@@ -1,23 +1,28 @@
 #!/usr/bin/env bash
-# =============================================================================
-# provision-ce.sh —— 在 VM 里安装 / 升级 CompilerExplorer（直接跑，无内层 docker）。
-#   由 cloud-init 首启调用，也可在 VM 里重跑以升级 CE。**fail-closed**：任一步失败
-#   即非零退出，不会带半成品起 CE。
-#
-#   用法（VM 内，root）:
-#     provision-ce.sh <ce-tag>           # 例: provision-ce.sh gh-18904
-#
-#   依赖 QEMU 9p 共享：
-#     /opt/compiler-explorer  <- 工具链（只读）
-#     /mnt/ce-repo            <- 本仓库（只读；取 config/ 与 scripts/）
-#   环境变量：NODE_VERSION（空=取 nodejs 最新 v22）、NODE_SHA256（可选钉值）
-# =============================================================================
+# 在 VM 内装配 CE + Node + nsjail；用法：provision-ce.sh <ce-tag>
 set -euo pipefail
 
 CE_REF="${1:?用法: provision-ce.sh <ce-tag>  (如 gh-18904)}"
+[[ "${CE_REF}" =~ ^gh-[0-9]+$ ]] \
+  || { echo "错误: CE tag 格式应为 gh-<数字>。" >&2; exit 2; }
 REPO_SRC="${REPO_SRC:-/mnt/ce-repo}"
 NODE_VERSION="${NODE_VERSION:-}"
 NODE_SHA256="${NODE_SHA256:-}"
+node_version_supported() {
+  local version="$1" node_major node_minor node_patch
+  [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r node_major node_minor node_patch <<< "${version}"
+  (( 10#${node_major} > 22 \
+     || (10#${node_major} == 22 && 10#${node_minor} > 22) \
+     || (10#${node_major} == 22 && 10#${node_minor} == 22 && 10#${node_patch} >= 1) ))
+}
+[[ -z "${NODE_VERSION}" || "${NODE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || { echo "错误: NODE_VERSION 必须是纯版本号（例如 22.22.1）。" >&2; exit 2; }
+[[ -z "${NODE_VERSION}" ]] || node_version_supported "${NODE_VERSION}" \
+  || { echo "错误: 当前 CE 要求 Node >= 22.22.1。" >&2; exit 2; }
+[[ -z "${NODE_SHA256}" || "${NODE_SHA256}" =~ ^[[:xdigit:]]{64}$ ]] \
+  || { echo "错误: NODE_SHA256 必须是 64 位十六进制。" >&2; exit 2; }
+NODE_SHA256="${NODE_SHA256,,}"
 CE_HOME=/opt/ce
 NODE_HOME=/opt/node
 NSJAIL_SRC=/opt/nsjail-src
@@ -26,27 +31,34 @@ CE_GID=10001
 
 echo ">> provision CE @ ${CE_REF}"
 export DEBIAN_FRONTEND=noninteractive
+
+if systemctl cat ce.service >/dev/null 2>&1; then
+  systemctl stop ce.service
+fi
+
 apt-get update -qq
-# 构建 CE（node 原生扩展）+ 构建 nsjail 的依赖 + 运行库
 apt-get install -y -qq --no-install-recommends \
   git build-essential python3 ca-certificates curl xz-utils \
   cgroup-tools \
-  autoconf bison flex g++ make pkg-config libtool protobuf-compiler \
-  libprotobuf-dev libnl-route-3-dev \
-  libprotobuf32 libnl-route-3-200
+  autoconf bison flex pkg-config libtool protobuf-compiler \
+  libprotobuf-dev libnl-route-3-dev
 
-# ---- 1) Node 22（官方 tarball 到 /opt/node；CE 要求 >=22.22.1）----------------
+# Node 22（CE 要求 >= 22.22.1）
 if [[ ! -x "${NODE_HOME}/bin/node" ]]; then
   if [[ -z "${NODE_VERSION}" ]]; then
-    NODE_VERSION="$(curl -fsSL https://nodejs.org/dist/latest-v22.x/ \
-      | grep -oE 'node-v22\.[0-9]+\.[0-9]+-linux-x64\.tar\.xz' | head -1 \
-      | sed -E 's/node-v(.*)-linux-x64\.tar\.xz/\1/')"
+    node_index="$(curl -fsSL https://nodejs.org/dist/latest-v22.x/)"
+    node_asset="$(printf '%s\n' "${node_index}" \
+      | grep -oE 'node-v22\.[0-9]+\.[0-9]+-linux-x64\.tar\.xz' || true)"
+    node_asset="${node_asset%%$'\n'*}"
+    NODE_VERSION="${node_asset#node-v}"
+    NODE_VERSION="${NODE_VERSION%-linux-x64.tar.xz}"
   fi
   [[ -n "${NODE_VERSION}" ]] || { echo "错误: 解析不到 node 版本"; exit 1; }
+  node_version_supported "${NODE_VERSION}" \
+    || { echo "错误: 当前 CE 要求 Node >= 22.22.1，解析到 v${NODE_VERSION}。" >&2; exit 1; }
   echo ">> 安装 node v${NODE_VERSION}"
   tar_ball="node-v${NODE_VERSION}-linux-x64.tar.xz"
   curl -fsSL -o "/tmp/${tar_ball}" "https://nodejs.org/dist/v${NODE_VERSION}/${tar_ball}"
-  # 完整性校验：钉了 NODE_SHA256 用它；否则用 nodejs 官方 SHASUMS256.txt 核对
   if [[ -n "${NODE_SHA256}" ]]; then
     expect="${NODE_SHA256}"
   else
@@ -57,14 +69,24 @@ if [[ ! -x "${NODE_HOME}/bin/node" ]]; then
   [[ -n "${expect}" && "${actual}" == "${expect}" ]] \
     || { echo "错误: node tarball SHA256 不匹配（期望 ${expect} 实际 ${actual}）"; exit 1; }
   echo ">> node tarball SHA256 校验通过"
+  rm -rf "/opt/node-v${NODE_VERSION}-linux-x64"
   tar -xJ -C /opt -f "/tmp/${tar_ball}"
+  rm -rf "${NODE_HOME}"  # 清理上次失败留下的半成品。
   mv "/opt/node-v${NODE_VERSION}-linux-x64" "${NODE_HOME}"
   rm -f "/tmp/${tar_ball}"
 fi
 export PATH="${NODE_HOME}/bin:${PATH}"
-echo ">> node $(node --version)"
+INSTALLED_NODE_VERSION="$(node --version)"
+INSTALLED_NODE_VERSION="${INSTALLED_NODE_VERSION#v}"
+node_version_supported "${INSTALLED_NODE_VERSION}" \
+  || { echo "错误: 已安装 Node v${INSTALLED_NODE_VERSION}，但当前 CE 要求 >= 22.22.1。" >&2; exit 1; }
+if [[ -n "${NODE_VERSION}" && "${INSTALLED_NODE_VERSION}" != "${NODE_VERSION}" ]]; then
+  echo "错误: 已安装 Node v${INSTALLED_NODE_VERSION}，请求的是 v${NODE_VERSION}；请重建 VM 后装配。" >&2
+  exit 1
+fi
+echo ">> node v${INSTALLED_NODE_VERSION}"
 
-# ---- 2) nsjail（CE fork，分支 ce）—— 编译并装到 /usr/local/bin -----------------
+# nsjail（Compiler Explorer fork）
 if [[ ! -x /usr/local/bin/nsjail ]]; then
   echo ">> 编译安装 nsjail（compiler-explorer/nsjail@ce）"
   rm -rf "${NSJAIL_SRC}"
@@ -73,50 +95,53 @@ if [[ ! -x /usr/local/bin/nsjail ]]; then
   make -C "${NSJAIL_SRC}" -j"$(nproc)"
   cp "${NSJAIL_SRC}/nsjail" /usr/local/bin/nsjail
   chmod 0755 /usr/local/bin/nsjail
+  rm -rf "${NSJAIL_SRC}"
 fi
-nsjail --version >/dev/null   # fail-closed：装不上就在这里失败，不起 CE
+nsjail --version >/dev/null
 
-# ---- 3) ce 用户（uid 10001，CE 进程与 nsjail 用它）------------------------------
-id -u ce >/dev/null 2>&1 || {
+# ce 用户
+if id -u ce >/dev/null 2>&1; then
+  [[ "$(id -u ce)" == "${CE_UID}" ]] \
+    || { echo "错误: 现有 ce 用户 uid 不是 ${CE_UID}" >&2; exit 1; }
+  CE_GID="$(id -g ce)"
+else
   groupadd --system --gid "${CE_GID}" ce
   useradd --system --uid "${CE_UID}" --gid ce --home "${CE_HOME}" ce
-}
+fi
 
-# ---- 4) CE 源码 @ CE_REF -------------------------------------------------------
+# CE 源码
 if [[ -d "${CE_HOME}/.git" ]]; then
   echo ">> 已存在 CE checkout，切换到 ${CE_REF}"
   git -C "${CE_HOME}" fetch --depth 1 origin "refs/tags/${CE_REF}:refs/tags/${CE_REF}" || git -C "${CE_HOME}" fetch --tags
   git -C "${CE_HOME}" checkout -q "${CE_REF}"
 else
   echo ">> 克隆 CE @ ${CE_REF}"
+  rm -rf "${CE_HOME}"  # 清理上次失败留下的非 Git 目录。
   git clone --depth 1 --branch "${CE_REF}" \
     https://github.com/compiler-explorer/compiler-explorer.git "${CE_HOME}"
 fi
 
-# ---- 5) 构建（webpack 前端 + tsc 后端）------------------------------------------
 echo ">> 构建 CE（首次较慢）"
 cd "${CE_HOME}"
 npm ci --no-audit --no-fund
 npm run webpack
 npm run ts-compile
 npm prune --omit=dev
+npm cache clean --force
 
-# ---- 6) 套用我们的覆盖配置 —— 用符号链接指向 9p 实时共享，改配置后 restart 即生效 ---
+# 配置走 9p 软链，修改后只需重启服务。
 for f in c++ mlir compiler-explorer execution; do
   ln -sfn "${REPO_SRC}/config/${f}.local.properties" "${CE_HOME}/etc/config/${f}.local.properties"
 done
 
-# ---- 7) nsjail cgroup 前置（官方写法 + systemd 持久化，重启不丢；fail-closed）-----
 CE_UID="${CE_UID}" CE_GID="${CE_GID}" bash "${REPO_SRC}/scripts/setup-nsjail-cgroups.sh" --install-systemd
 
-# ---- 8) systemd 服务 -----------------------------------------------------------
 chown -R ce:ce "${CE_HOME}"
 cp "${REPO_SRC}/vm/ce.service" /etc/systemd/system/ce.service
 systemctl daemon-reload
 systemctl enable ce.service
 systemctl restart ce.service
 
-# 启起来后快速自检：等 10240 健康检查通过，否则 fail-closed
 echo ">> 等待 CE 健康检查 ..."
 for i in $(seq 1 60); do
   if curl -fsS http://127.0.0.1:10240/healthcheck >/dev/null 2>&1; then
