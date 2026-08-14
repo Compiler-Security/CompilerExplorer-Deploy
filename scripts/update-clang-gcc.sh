@@ -70,13 +70,21 @@ update_clang() {
   local url="${CLANG_TARBALL_URL}"
   if [[ -z "${url}" ]]; then
     echo ">> 查询最新 LLVM release ..."
-    local tag
-    tag="$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
-            | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+    local json tag
+    # 先完整取回响应再解析 —— 不要 curl 边下边接 grep -m1/head（提前关闭管道会让
+    # curl 触发 SIGPIPE 报 (23)，在 pipefail 下直接中断脚本）。
+    json="$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest)"
+    tag="$(printf '%s\n' "${json}" | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+    tag="${tag%%$'\n'*}"   # 取第一行
+    [[ -n "${tag}" ]] || { echo "错误: 解析不到 LLVM 最新 tag（可能 API 限流/网络问题）；可手动设 CLANG_TARBALL_URL"; exit 1; }
     echo ">> 最新 LLVM tag: ${tag}"
-    # LLVM release 资产命名形如: LLVM-<ver>-Linux-X64.tar.xz （按实际资产名调整）
-    local ver="${tag#llvmorg-}"
-    url="https://github.com/llvm/llvm-project/releases/download/${tag}/LLVM-${ver}-Linux-X64.tar.xz"
+    # 从 release 资产里挑 Linux 预编译 tarball（资产名随版本会变，故不硬编码）。
+    url="$(printf '%s\n' "${json}" \
+           | grep -oE 'https://[^"]*(Linux-X64|clang\+llvm[^"]*[Ll]inux[^"]*(x86_64|X64))[^"]*\.tar\.xz' \
+           || true)"
+    url="${url%%$'\n'*}"   # 取第一条
+    [[ -n "${url}" ]] || { echo "错误: ${tag} 下找不到 Linux 预编译包；请手动设 CLANG_TARBALL_URL"; exit 1; }
+    echo ">> 选用资产: ${url}"
   fi
   local dest="${CE_COMPILERS_ROOT}/clang-$(date +%Y%m%d)"
   install_tarball "${url}" "${dest}"
