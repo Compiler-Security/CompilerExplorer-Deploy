@@ -21,6 +21,13 @@ if [[ -z "${CE_COMPILERS_ROOT:-}" && -f "${REPO_ROOT}/.env" ]]; then
 fi
 : "${CE_COMPILERS_ROOT:?未设置 CE_COMPILERS_ROOT。请 cp .env.example .env 并填入实际路径，或用环境变量传入。}"
 
+# 安全护栏（最小爆炸半径）：规范化并拒绝空/根等危险工具链根，防止后续 rm -rf 误伤。
+CE_COMPILERS_ROOT="$(readlink -m "${CE_COMPILERS_ROOT}")"
+if [[ -z "${CE_COMPILERS_ROOT}" || "${CE_COMPILERS_ROOT}" == "/" ]]; then
+  echo "错误: CE_COMPILERS_ROOT 为空或为根目录，已拒绝（防止 rm -rf 误删）。" >&2
+  exit 1
+fi
+
 LINK_NAME="mlir-custom"
 
 SRC="${1:?用法: deploy-mlir.sh <构建产物目录> [构建标识]}"
@@ -32,7 +39,7 @@ TARGET="${CE_COMPILERS_ROOT}/${LINK_NAME}.${BUILD_ID}"
 echo ">> 发布 ${SRC} -> ${TARGET}"
 mkdir -p "${CE_COMPILERS_ROOT}"
 # 先同步到临时目标目录，避免半成品被符号链接指到。
-rm -rf "${TARGET}.partial"
+rm -rf -- "${TARGET}.partial"
 rsync -a --delete "${SRC}/" "${TARGET}.partial/"
 mv -T "${TARGET}.partial" "${TARGET}"
 
@@ -55,9 +62,12 @@ docker compose -f "${COMPOSE_DIR}/docker-compose.yml" restart ce
 # 清理旧 build，只保留最近 3 个（不含当前链接指向的）。
 cd "${CE_COMPILERS_ROOT}"
 ls -1dt ${LINK_NAME}.* 2>/dev/null | tail -n +4 | while read -r old; do
+  # 只删当前目录下名为 mlir-custom.* 的真实目录（防误删其它内容）
+  [[ "${old}" == "${LINK_NAME}".* && "${old}" != */* && -d "${old}" ]] \
+    || { echo ">> 跳过非常规项 ${old}"; continue; }
   [[ "$(readlink -f "${LINK_NAME}")" == "$(readlink -f "${old}")" ]] && continue
   echo ">> 清理旧版本 ${old}"
-  rm -rf "${old}"
+  rm -rf -- "${old}"
 done
 
 echo ">> 完成。"

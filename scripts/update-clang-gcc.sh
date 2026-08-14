@@ -32,6 +32,13 @@ if [[ -z "${CE_COMPILERS_ROOT:-}" && -f "${REPO_ROOT}/.env" ]]; then
 fi
 : "${CE_COMPILERS_ROOT:?未设置 CE_COMPILERS_ROOT。请 cp .env.example .env 并填入实际路径，或用环境变量传入。}"
 
+# 安全护栏（最小爆炸半径）：规范化并拒绝空/根等危险工具链根，防止后续 rm -rf 误伤。
+CE_COMPILERS_ROOT="$(readlink -m "${CE_COMPILERS_ROOT}")"
+if [[ -z "${CE_COMPILERS_ROOT}" || "${CE_COMPILERS_ROOT}" == "/" ]]; then
+  echo "错误: CE_COMPILERS_ROOT 为空或为根目录，已拒绝（防止 rm -rf 误删）。" >&2
+  exit 1
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -103,7 +110,7 @@ install_tarball() {
     fi
   fi
 
-  rm -rf "${dest}.partial"
+  rm -rf -- "${dest}.partial"
   mkdir -p "${dest}.partial"
   tar -xf "${WORK}/pkg.tar" -C "${dest}.partial" --strip-components=1
   mv -T "${dest}.partial" "${dest}"
