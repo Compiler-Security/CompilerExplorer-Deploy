@@ -119,6 +119,8 @@ stage('deploy to CE') {
 | `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
 | `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
 
+默认通过 `restrictToLanguages=c++,llvm,mlir` 只加载 C++、LLVM IR 和 MLIR。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。需要 C 语言时，将 `c` 加入逗号分隔的白名单并提供对应的 `c.local.properties`。
+
 默认只允许编译，不运行用户程序。若需要开放 x86_64 产物执行，将 `supportsExecute` 改为 `true` 后重启 CE；riscv64 产物仍需 qemu-user。
 
 MLIR 默认 pass 或运行库路径可在 `config/mlir.local.properties` 中设置：
