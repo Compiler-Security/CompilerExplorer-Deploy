@@ -1,0 +1,246 @@
+diff --git a/examples/p4/default.p4 b/examples/p4/default.p4
+new file mode 100644
+index 0000000..612f6b9
+--- /dev/null
++++ b/examples/p4/default.p4
+@@ -0,0 +1,30 @@
++#include <core.p4>
++
++header ethernet_t {
++    bit<48> dst_addr;
++    bit<48> src_addr;
++    bit<16> ether_type;
++}
++
++struct headers_t {
++    ethernet_t ethernet;
++}
++
++control ingress(inout headers_t hdr) {
++    action drop() {
++        hdr.ethernet.setInvalid();
++    }
++
++    table forwarding {
++        key = {
++            hdr.ethernet.dst_addr: exact;
++        }
++        actions = {
++            drop;
++        }
++    }
++
++    apply {
++        forwarding.apply();
++    }
++}
+diff --git a/lib/languages.ts b/lib/languages.ts
+index 04be9a0..dc451c6 100644
+--- a/lib/languages.ts
++++ b/lib/languages.ts
+@@ -797,6 +797,17 @@ const definitions: Record<LanguageKey, LanguageDefinition> = {
+         previewFilter: null,
+         monacoDisassembly: null,
+     },
++    p4: {
++        name: 'P4',
++        monaco: 'p4',
++        extensions: ['.p4'],
++        alias: ['p4-16'],
++        logoFilename: null,
++        logoFilenameDark: null,
++        formatter: null,
++        previewFilter: null,
++        monacoDisassembly: null,
++    },
+     pascal: {
+         name: 'Pascal',
+         monaco: 'pascal',
+diff --git a/static/modes/_all.ts b/static/modes/_all.ts
+index c7f6add..c72f42f 100644
+--- a/static/modes/_all.ts
++++ b/static/modes/_all.ts
+@@ -66,6 +66,7 @@ import './nix-mode';
+ import './ocaml-mode';
+ import './odin-mode';
+ import './openclc-mode';
++import './p4-mode';
+ import './ptx-mode';
+ import './perl-concise-mode';
+ import './razorforge-mode';
+diff --git a/static/modes/p4-mode.ts b/static/modes/p4-mode.ts
+new file mode 100644
+index 0000000..442d8ff
+--- /dev/null
++++ b/static/modes/p4-mode.ts
+@@ -0,0 +1,158 @@
++// Copyright (c) 2026, Compiler Explorer Authors
++// All rights reserved.
++
++import * as monaco from 'monaco-editor';
++
++export function definition(): monaco.languages.IMonarchLanguage {
++    return {
++        keywords: [
++            'abstract',
++            'action',
++            'apply',
++            'const',
++            'control',
++            'default',
++            'else',
++            'enum',
++            'exit',
++            'extern',
++            'false',
++            'header',
++            'header_union',
++            'if',
++            'in',
++            'inout',
++            'key',
++            'list',
++            'match_kind',
++            'out',
++            'package',
++            'parser',
++            'priority',
++            'return',
++            'select',
++            'state',
++            'struct',
++            'switch',
++            'table',
++            'this',
++            'transition',
++            'true',
++            'tuple',
++            'type',
++            'typedef',
++            'verify',
++        ],
++
++        types: ['bit', 'bool', 'error', 'int', 'string', 'varbit', 'void'],
++        builtins: ['packet_in', 'packet_out'],
++
++        operators: [
++            '=',
++            '>',
++            '<',
++            '!',
++            '~',
++            '?',
++            ':',
++            '==',
++            '<=',
++            '>=',
++            '!=',
++            '&&',
++            '||',
++            '++',
++            '--',
++            '+',
++            '-',
++            '*',
++            '/',
++            '&',
++            '|',
++            '^',
++            '%',
++            '<<',
++            '>>',
++        ],
++
++        symbols: /[=><!~?:&|+\-*\/^%]+/,
++        escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/,
++
++        tokenizer: {
++            root: [
++                [/^\s*#\s*[a-zA-Z_]\w*/, 'keyword.directive'],
++                {include: '@whitespace'},
++                [/@[a-zA-Z_]\w*/, 'annotation'],
++                [/[a-zA-Z_]\w*/, {
++                    cases: {
++                        '@types': 'type',
++                        '@builtins': 'type.identifier',
++                        '@keywords': 'keyword',
++                        '@default': 'identifier',
++                    },
++                }],
++                [/\d+[ws]0[xX][0-9a-fA-F_]+/, 'number.hex'],
++                [/\d+[ws]0[bB][01_]+/, 'number.binary'],
++                [/\d+[ws]\d[\d_]*/, 'number'],
++                [/0[xX][0-9a-fA-F_]+/, 'number.hex'],
++                [/0[bB][01_]+/, 'number.binary'],
++                [/\d[\d_]*/, 'number'],
++                [/"([^"\\]|\\.)*$/, 'string.invalid'],
++                [/"/, 'string', '@string'],
++                [/@symbols/, {cases: {'@operators': 'operator', '@default': ''}}],
++                [/[{}()[\]]/, '@brackets'],
++                [/[;,.]/, 'delimiter'],
++            ],
++
++            whitespace: [
++                [/[ \t\r\n]+/, 'white'],
++                [/\/\*/, 'comment', '@comment'],
++                [/\/\/.*$/, 'comment'],
++            ],
++
++            comment: [
++                [/[^/*]+/, 'comment'],
++                [/\/\*/, 'comment', '@push'],
++                ['\\*/', 'comment', '@pop'],
++                [/[/*]/, 'comment'],
++            ],
++
++            string: [
++                [/[^\\"]+/, 'string'],
++                [/@escapes/, 'string.escape'],
++                [/\\./, 'string.escape.invalid'],
++                [/"/, 'string', '@pop'],
++            ],
++        },
++    };
++}
++
++const config: monaco.languages.LanguageConfiguration = {
++    comments: {
++        lineComment: '//',
++        blockComment: ['/*', '*/'],
++    },
++    brackets: [
++        ['{', '}'],
++        ['[', ']'],
++        ['(', ')'],
++    ],
++    autoClosingPairs: [
++        {open: '{', close: '}'},
++        {open: '[', close: ']'},
++        {open: '(', close: ')'},
++        {open: '"', close: '"', notIn: ['string', 'comment']},
++        {open: "'", close: "'", notIn: ['string', 'comment']},
++    ],
++    surroundingPairs: [
++        {open: '{', close: '}'},
++        {open: '[', close: ']'},
++        {open: '(', close: ')'},
++        {open: '"', close: '"'},
++        {open: "'", close: "'"},
++    ],
++};
++
++monaco.languages.register({id: 'p4', extensions: ['.p4'], aliases: ['P4', 'p4-16']});
++monaco.languages.setMonarchTokensProvider('p4', definition());
++monaco.languages.setLanguageConfiguration('p4', config);
+diff --git a/types/languages.interfaces.ts b/types/languages.interfaces.ts
+index 8711bc0..ef7fd09 100644
+--- a/types/languages.interfaces.ts
++++ b/types/languages.interfaces.ts
+@@ -92,6 +92,7 @@ export type LanguageKey =
+     | 'objc'
+     | 'objc++'
+     | 'openclc'
++    | 'p4'
+     | 'pascal'
+     | 'perl'
+     | 'pony'

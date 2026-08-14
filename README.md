@@ -1,6 +1,6 @@
 # 内网自托管 Compiler Explorer
 
-面向受信内网的 Compiler Explorer，提供 C/C++、Clang、LLVM IR、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
+面向受信内网的 Compiler Explorer，提供 C/C++、Clang、LLVM IR、P4 语法高亮、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
 
 主路径是在 Docker 中启动 QEMU/KVM VM，CE 在 VM 内以非 root 用户运行，并用 nsjail 隔离每次编译。Kata Containers 是保留的备选路径。
 
@@ -120,7 +120,7 @@ stage('deploy to CE') {
 | `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
 | `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
 
-默认通过 `restrictToLanguages=c,c++,llvm,mlir` 只加载 C、C++、LLVM IR 和 MLIR。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
+默认通过 `restrictToLanguages=c,c++,llvm,mlir,p4` 只加载 C、C++、LLVM IR、MLIR 和 P4。P4 由装配阶段应用的小型 CE 源码补丁提供 Monaco 语法高亮，不安装或替换编译器；编译仍使用部署方已有的定制工具链。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
 
 默认只允许编译，不运行用户程序。若需要开放 x86_64 产物执行，将 `supportsExecute` 改为 `true` 后重启 CE；riscv64 产物仍需 qemu-user。
 

@@ -125,6 +125,15 @@ else
     https://github.com/compiler-explorer/compiler-explorer.git "${CE_HOME}"
 fi
 
+P4_SYNTAX_PATCH="${REPO_SRC}/vm/patches/ce-p4-syntax.patch"
+if git -C "${CE_HOME}" apply --reverse --check "${P4_SYNTAX_PATCH}" >/dev/null 2>&1; then
+  echo ">> P4 语法高亮补丁已应用"
+else
+  echo ">> 应用 P4 语法高亮补丁"
+  git -C "${CE_HOME}" apply --check "${P4_SYNTAX_PATCH}"
+  git -C "${CE_HOME}" apply "${P4_SYNTAX_PATCH}"
+fi
+
 echo ">> 构建 CE（首次较慢）"
 cd "${CE_HOME}"
 npm ci --no-audit --no-fund

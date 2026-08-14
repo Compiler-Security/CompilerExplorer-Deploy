@@ -9,6 +9,11 @@ WORKDIR /ce
 RUN git clone --depth 1 --branch "${CE_REF}" \
       https://github.com/compiler-explorer/compiler-explorer.git .
 
+COPY vm/patches/ce-p4-syntax.patch /tmp/ce-p4-syntax.patch
+RUN git apply --check /tmp/ce-p4-syntax.patch \
+ && git apply /tmp/ce-p4-syntax.patch \
+ && rm /tmp/ce-p4-syntax.patch
+
 # 运行镜像不保留 .git，预先生成 dist 版本元数据。
 RUN git rev-parse HEAD > git_hash \
  && printf '%s\n' "${CE_REF}" > release_build
