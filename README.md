@@ -137,6 +137,10 @@ compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 - 外部 nginx（用 `nginx/ce.conf`）：安全响应头（nosniff / frame / CSP / Referrer-Policy 等）、
   `limit_req` 限流、`client_max_body_size 16m`；CE 只绑回环 `127.0.0.1:10240`，不直接对内网开放。
 - 危险编译选项黑名单：`optionsForbiddenRe=--plugin|-fplugin|--wrapper`。
+- **供应链完整性**：`update-clang-gcc.sh` 每次实际下载后核对 SHA256。在 `.env` 钉住
+  `LLVM_SHA256` / `GCC_SHA256` / `GCC_RISCV_SHA256` 即强制比对、不符即中止；
+  LLVM 包还会在有 `gpg` 时用官方 `.sig` 验签。prepkg 不发校验文件，只能靠钉哈希。
+  （首次先留空跑一次拿到脚本打印的哈希，核对官方后填回 `.env` 钉死。）
 - 镜像基于固定版本基底构建；建议纳入常规镜像/依赖漏洞扫描。
 
 **权衡（要知道）**：nsjail 需要给容器放权（`SYS_ADMIN`/`SYS_PTRACE` + 放开 seccomp/apparmor +

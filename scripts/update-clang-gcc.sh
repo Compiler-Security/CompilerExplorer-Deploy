@@ -43,6 +43,14 @@ GCC_TARBALL_URL="${GCC_TARBALL_URL:-}"                     # 默认: prepkg x86_
 GCC_RISCV_TARBALL_URL="${GCC_RISCV_TARBALL_URL:-}"         # 默认: prepkg riscv64
 PREPKG_BASE="https://github.com/prepkg/gcc-toolchain/releases/latest/download"
 
+# ---- 完整性校验（供应链安全）---------------------------------------------------
+# 可选：把官方/核对过的 SHA256 钉在下面变量里（或 .env），每次下载强制比对，
+# 不符即中止 —— 防止公网二进制被篡改。留空则只打印实际哈希供你核对后钉死。
+#   首次拿到哈希的方式：先留空跑一次，记下打印的 SHA256，再填回来。
+LLVM_SHA256="${LLVM_SHA256:-}"            # 对应 clang 包
+GCC_SHA256="${GCC_SHA256:-}"              # 对应 gcc x86_64 包
+GCC_RISCV_SHA256="${GCC_RISCV_SHA256:-}"  # 对应 gcc riscv64 包
+
 DID_CHANGE=0   # 是否有实际下载/换链接；用于决定要不要重启 CE
 
 restart_ce() {
@@ -58,10 +66,43 @@ point_link() { # point_link <link-name> <target-dir>
   echo ">> $1 -> ${target}"
 }
 
-install_tarball() { # install_tarball <url> <dest> ; 解压并 strip 顶层目录
-  local url="$1" dest="$2"
+# install_tarball <url> <dest> [expected_sha256] [sig_url]
+#   下载 -> 校验完整性 -> 解压并 strip 顶层目录。
+install_tarball() {
+  local url="$1" dest="$2" expect_sha="${3:-}" sig_url="${4:-}"
   echo ">> 下载 ${url}"
   curl -fSL --retry 3 -o "${WORK}/pkg.tar" "${url}"
+
+  # ---- 完整性校验（在解压前）----
+  local actual_sha
+  actual_sha="$(sha256sum "${WORK}/pkg.tar" | awk '{print $1}')"
+  if [[ -n "${expect_sha}" ]]; then
+    if [[ "${actual_sha}" != "${expect_sha}" ]]; then
+      echo "错误: SHA256 不匹配！已中止，未解压。" >&2
+      echo "  期望: ${expect_sha}" >&2
+      echo "  实际: ${actual_sha}" >&2
+      echo "  （若是官方发布了新版，请核对后更新 .env 里钉的哈希）" >&2
+      exit 1
+    fi
+    echo ">> SHA256 校验通过: ${actual_sha}"
+  else
+    echo ">> 未固定 SHA256。本次下载哈希: ${actual_sha}"
+    echo ">>   （可把它写进 .env 对应变量钉死，之后每次下载都会强制比对）"
+    # LLVM 提供 GPG 签名：有 gpg 时做一次验签（best-effort，不静默放过）。
+    if [[ -n "${sig_url}" ]]; then
+      if command -v gpg >/dev/null 2>&1; then
+        if curl -fsSL -o "${WORK}/pkg.sig" "${sig_url}" \
+           && gpg --verify "${WORK}/pkg.sig" "${WORK}/pkg.tar" 2>/dev/null; then
+          echo ">> GPG 签名验证通过"
+        else
+          echo ">> 警告: GPG 签名未能验证（多半是没导入 LLVM 发布密钥）。要强校验请固定 SHA256。" >&2
+        fi
+      else
+        echo ">> 提示: 本机无 gpg，跳过 LLVM 签名验证；建议固定 SHA256。" >&2
+      fi
+    fi
+  fi
+
   rm -rf "${dest}.partial"
   mkdir -p "${dest}.partial"
   tar -xf "${WORK}/pkg.tar" -C "${dest}.partial" --strip-components=1
@@ -72,10 +113,10 @@ install_tarball() { # install_tarball <url> <dest> ; 解压并 strip 顶层目�
   fi
 }
 
-# install_versioned <link> <dirbase> <version-id> <url> <exe-relpath>
+# install_versioned <link> <dirbase> <version-id> <url> <exe-relpath> [expected_sha256] [sig_url]
 # 幂等核心：目标目录 <dirbase>-<version-id> 已存在且二进制可用 → 不重新下载。
 install_versioned() {
-  local link="$1" dirbase="$2" verid="$3" url="$4" exe="$5"
+  local link="$1" dirbase="$2" verid="$3" url="$4" exe="$5" expect_sha="${6:-}" sig_url="${7:-}"
   local dest="${CE_COMPILERS_ROOT}/${dirbase}-${verid}"
 
   if [[ -x "${dest}/${exe}" ]]; then
@@ -90,7 +131,7 @@ install_versioned() {
   fi
 
   echo ">> [更新] ${dirbase} -> ${verid}"
-  install_tarball "${url}" "${dest}"
+  install_tarball "${url}" "${dest}" "${expect_sha}" "${sig_url}"
   [[ -x "${dest}/${exe}" ]] \
     || { echo "错误: ${dest}/${exe} 不存在，请检查 tarball 结构/来源"; exit 1; }
   point_link "${link}" "${dest}"
@@ -120,7 +161,7 @@ update_clang() {
     # 自定义 URL：用文件名作版本标识（尽力而为）。
     verid="$(basename "${url}")"; verid="${verid%.tar.xz}"; verid="${verid%.tar.gz}"
   fi
-  install_versioned clang-latest clang "${verid}" "${url}" "bin/clang++"
+  install_versioned clang-latest clang "${verid}" "${url}" "bin/clang++" "${LLVM_SHA256}" "${url}.sig"
 }
 
 # gcc_version_id <triple> —— 用 HEAD 的 Last-Modified 作资产内容标识（不下载正文）。
@@ -132,8 +173,8 @@ gcc_version_id() {
   date -d "${lm}" +%Y%m%d-%H%M%S 2>/dev/null || echo "${lm//[^0-9]/}"
 }
 
-update_gcc() { # update_gcc <triple> <link-name> <url-override>
-  local triple="$1" link="$2" override="${3:-}"
+update_gcc() { # update_gcc <triple> <link-name> <url-override> <sha256-pin>
+  local triple="$1" link="$2" override="${3:-}" pin="${4:-}"
   local url verid
   if [[ -n "${override}" ]]; then
     url="${override}"
@@ -143,17 +184,18 @@ update_gcc() { # update_gcc <triple> <link-name> <url-override>
     echo ">> 检查 gcc-${triple} 最新资产版本 ..."
     verid="$(gcc_version_id "${triple}")"
   fi
-  install_versioned "${link}" "gcc-${triple}" "${verid}" "${url}" "bin/${triple}-g++"
+  # prepkg 不发布校验文件，只能靠钉住的 SHA256 做完整性校验（无签名可验）。
+  install_versioned "${link}" "gcc-${triple}" "${verid}" "${url}" "bin/${triple}-g++" "${pin}" ""
 }
 
 case "${1:-all}" in
   clang)            update_clang ;;
-  gcc)              update_gcc x86_64-linux-gnu gcc-latest "${GCC_TARBALL_URL}" ;;
-  gcc-riscv|riscv)  update_gcc riscv64-linux-gnu gcc-riscv-latest "${GCC_RISCV_TARBALL_URL}" ;;
+  gcc)              update_gcc x86_64-linux-gnu gcc-latest "${GCC_TARBALL_URL}" "${GCC_SHA256}" ;;
+  gcc-riscv|riscv)  update_gcc riscv64-linux-gnu gcc-riscv-latest "${GCC_RISCV_TARBALL_URL}" "${GCC_RISCV_SHA256}" ;;
   all)
     update_clang
-    update_gcc x86_64-linux-gnu gcc-latest "${GCC_TARBALL_URL}"
-    update_gcc riscv64-linux-gnu gcc-riscv-latest "${GCC_RISCV_TARBALL_URL}"
+    update_gcc x86_64-linux-gnu gcc-latest "${GCC_TARBALL_URL}" "${GCC_SHA256}"
+    update_gcc riscv64-linux-gnu gcc-riscv-latest "${GCC_RISCV_TARBALL_URL}" "${GCC_RISCV_SHA256}"
     ;;
   *) echo "用法: $0 {clang|gcc|gcc-riscv|all}"; exit 2 ;;
 esac
