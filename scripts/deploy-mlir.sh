@@ -12,18 +12,25 @@
 # =============================================================================
 set -euo pipefail
 
-CE_COMPIERS_ROOT="${CE_COMPILERS_ROOT:-/srv/ce/compilers}"
-COMPOSE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE_DIR="${REPO_ROOT}"
+# 工具链根：环境变量优先；否则读仓库根 .env；再不行报错。
+if [[ -z "${CE_COMPILERS_ROOT:-}" && -f "${REPO_ROOT}/.env" ]]; then
+  set -a; # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.env"; set +a
+fi
+: "${CE_COMPILERS_ROOT:?未设置 CE_COMPILERS_ROOT。请 cp .env.example .env 并填入实际路径，或用环境变量传入。}"
+
 LINK_NAME="mlir-custom"
 
 SRC="${1:?用法: deploy-mlir.sh <构建产物目录> [构建标识]}"
 BUILD_ID="${2:-$(date +%Y%m%d%H%M%S)}"
-TARGET="${CE_COMPIERS_ROOT}/${LINK_NAME}.${BUILD_ID}"
+TARGET="${CE_COMPILERS_ROOT}/${LINK_NAME}.${BUILD_ID}"
 
 [[ -x "${SRC}/bin/mlir-opt" ]] || { echo "错误: ${SRC}/bin/mlir-opt 不存在或不可执行"; exit 1; }
 
 echo ">> 发布 ${SRC} -> ${TARGET}"
-mkdir -p "${CE_COMPIERS_ROOT}"
+mkdir -p "${CE_COMPILERS_ROOT}"
 # 先同步到临时目标目录，避免半成品被符号链接指到。
 rm -rf "${TARGET}.partial"
 rsync -a --delete "${SRC}/" "${TARGET}.partial/"
@@ -35,18 +42,18 @@ if command -v chcon >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" ==
 fi
 
 # 原子切换符号链接：先建临时链接再 rename。
-ln -sfn "${TARGET}" "${CE_COMPIERS_ROOT}/.${LINK_NAME}.tmp"
-mv -T "${CE_COMPIERS_ROOT}/.${LINK_NAME}.tmp" "${CE_COMPIERS_ROOT}/${LINK_NAME}"
+ln -sfn "${TARGET}" "${CE_COMPILERS_ROOT}/.${LINK_NAME}.tmp"
+mv -T "${CE_COMPILERS_ROOT}/.${LINK_NAME}.tmp" "${CE_COMPILERS_ROOT}/${LINK_NAME}"
 
 echo ">> 已切换 ${LINK_NAME} -> ${TARGET}"
-"${CE_COMPIERS_ROOT}/${LINK_NAME}/bin/mlir-opt" --version | head -1 || true
+"${CE_COMPILERS_ROOT}/${LINK_NAME}/bin/mlir-opt" --version | head -1 || true
 
 # 重启 CE，刷新其启动时缓存的 --version 显示（新编译本就会用新二进制）。
 echo ">> 重启 CE"
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" restart ce
 
 # 清理旧 build，只保留最近 3 个（不含当前链接指向的）。
-cd "${CE_COMPIERS_ROOT}"
+cd "${CE_COMPILERS_ROOT}"
 ls -1dt ${LINK_NAME}.* 2>/dev/null | tail -n +4 | while read -r old; do
   [[ "$(readlink -f "${LINK_NAME}")" == "$(readlink -f "${old}")" ]] && continue
   echo ">> 清理旧版本 ${old}"

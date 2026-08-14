@@ -42,9 +42,10 @@ services:
       - /tmp:rw,nosuid,nodev,size=2g   # 注意：不能 noexec —— nsjail 内要运行编译器/程序
 
     volumes:
-      # 工具链：宿主机目录只读挂载。更新工具链 = 改这里 + restart ce，零镜像重建。
+      # 工具链：宿主机目录只读挂载。路径来自 .env 的 CE_COMPILERS_ROOT（compose 自动读取 .env）。
+      # 更新工具链 = 改 CE_COMPILERS_ROOT 指向的目录 + restart ce，零镜像重建。
       # 若目标机开启 SELinux(Enforcing)，给挂载追加 ,z（如 :ro,z），否则容器读不到。
-      - /srv/ce/compilers:/opt/compiler-explorer:ro
+      - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT（cp .env.example .env 后改实际路径）}:/opt/compiler-explorer:ro"
       # nsjail 需要可写的宿主机 cgroupfs（v2 统一树）来建 ce-compile / ce-sandbox 子组。
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
       # 配置：单文件只读覆盖到 etc/config（保留仓内 defaults，仅叠加 local 覆盖）。

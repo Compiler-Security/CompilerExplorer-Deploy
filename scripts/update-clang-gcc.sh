@@ -18,12 +18,19 @@
 # =============================================================================
 set -euo pipefail
 
-CE_COMPIERS_ROOT="${CE_COMPILERS_ROOT:-/srv/ce/compilers}"
-COMPOSE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE_DIR="${REPO_ROOT}"
+# 工具链根：环境变量优先；否则读仓库根 .env；再不行报错。
+if [[ -z "${CE_COMPILERS_ROOT:-}" && -f "${REPO_ROOT}/.env" ]]; then
+  set -a; # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.env"; set +a
+fi
+: "${CE_COMPILERS_ROOT:?未设置 CE_COMPILERS_ROOT。请 cp .env.example .env 并填入实际路径，或用环境变量传入。}"
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-mkdir -p "${CE_COMPIERS_ROOT}"
+mkdir -p "${CE_COMPILERS_ROOT}"
 
 # ---- 可配置来源 -------------------------------------------------------------
 # Clang: 留空则自动取最新 LLVM release 的 Linux-X64 资产。
@@ -38,9 +45,9 @@ restart_ce() {
 
 # 原子拨链接
 point_link() { # point_link <link-name> <target-dir>
-  local link="${CE_COMPIERS_ROOT}/$1" target="$2"
-  ln -sfn "${target}" "${CE_COMPIERS_ROOT}/.$1.tmp"
-  mv -T "${CE_COMPIERS_ROOT}/.$1.tmp" "${link}"
+  local link="${CE_COMPILERS_ROOT}/$1" target="$2"
+  ln -sfn "${target}" "${CE_COMPILERS_ROOT}/.$1.tmp"
+  mv -T "${CE_COMPILERS_ROOT}/.$1.tmp" "${link}"
   echo ">> $1 -> ${target}"
 }
 
@@ -71,7 +78,7 @@ update_clang() {
     local ver="${tag#llvmorg-}"
     url="https://github.com/llvm/llvm-project/releases/download/${tag}/LLVM-${ver}-Linux-X64.tar.xz"
   fi
-  local dest="${CE_COMPIERS_ROOT}/clang-$(date +%Y%m%d)"
+  local dest="${CE_COMPILERS_ROOT}/clang-$(date +%Y%m%d)"
   install_tarball "${url}" "${dest}"
   [[ -x "${dest}/bin/clang++" ]] || { echo "错误: ${dest}/bin/clang++ 不存在，请检查 tarball 结构/来源"; exit 1; }
   point_link clang-latest "${dest}"
@@ -88,7 +95,7 @@ GCC 预编译包（发行版包解包 / Bootlin 工具链 / 内部制品库）�
 EOF
     exit 1
   fi
-  local dest="${CE_COMPIERS_ROOT}/gcc-$(date +%Y%m%d)"
+  local dest="${CE_COMPILERS_ROOT}/gcc-$(date +%Y%m%d)"
   install_tarball "${url}" "${dest}"
   [[ -x "${dest}/bin/g++" ]] || { echo "错误: ${dest}/bin/g++ 不存在，请检查 tarball 结构/来源"; exit 1; }
   point_link gcc-latest "${dest}"

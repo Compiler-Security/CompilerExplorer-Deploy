@@ -15,7 +15,7 @@
 
 ```
 宿主机
- ├─ /srv/ce/compilers/                # 工具链根（只读挂进容器）
+ ├─ <CE_COMPILERS_ROOT>/              # 工具链根（只读挂进容器; 路径在 .env 配, 示例 /srv/ce/compilers）
  │    ├─ clang-<date>/  ← clang-latest (符号链接)
  │    ├─ gcc-<date>/    ← gcc-latest   (符号链接)
  │    └─ mlir-custom.<build#>/ ← mlir-custom (符号链接)
@@ -30,14 +30,21 @@
 工具链走**宿主机目录 + 只读挂载 + 符号链接**，因此**更新任何工具链都不需要重建镜像**，
 只需替换目录 / 拨链接 + `docker compose restart ce`。
 
+> **工具链根路径不写死**：由仓库根 `.env` 的 `CE_COMPILERS_ROOT` 决定（docker-compose 与脚本都读它）。
+> 容器内固定挂在 `/opt/compiler-explorer`（被 nsjail cfg 与 CE config 引用，勿改），只有宿主机侧路径可换。
+
 > nginx 不进 Docker——用你们外部已有的部署，把 `nginx/ce.conf` 丢进其 `conf.d/` 即可。
 > CE 只绑定宿主机回环 `127.0.0.1:10240`，对外只经 nginx 暴露。
 
 ## 首次部署
 
 ```bash
+# 0. 配置工具链根路径（只需一次）
+cp .env.example .env
+#    编辑 .env，把 CE_COMPILERS_ROOT 改成你实际放置工具链的目录
+
 # 1. 准备工具链目录（至少各放一份，并建好符号链接）
-sudo mkdir -p /srv/ce/compilers
+mkdir -p "$(grep -E '^CE_COMPILERS_ROOT=' .env | cut -d= -f2)"
 #   - Clang/LLVM: 解压官方 tarball 为 clang-<date>，ln -s 指向 clang-latest
 #   - GCC:        解压为 gcc-<date>，ln -s 指向 gcc-latest
 #   - MLIR:       你们 Jenkins build 产物解压为 mlir-custom.<id>，ln -s 指向 mlir-custom
@@ -79,7 +86,8 @@ docker compose logs -f ce
 ```groovy
 stage('deploy to CE') {
   steps {
-    sh '/srv/ce/ssct-compiler-explorer/scripts/deploy-mlir.sh "$WORKSPACE/build/install" "$BUILD_NUMBER"'
+    // 路径指向你部署机上的本仓库；脚本会自己读仓库根 .env 的 CE_COMPILERS_ROOT
+    sh '/path/to/ssct-compiler-explorer/scripts/deploy-mlir.sh "$WORKSPACE/build/install" "$BUILD_NUMBER"'
   }
 }
 ```
@@ -151,10 +159,10 @@ compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
   仍不行就加 `privileged: true` 试（官方文档的兜底），定位后再收紧。
 - **目标机开了 SELinux（Enforcing）**：容器读不到挂载的配置/工具链（日志报 Permission denied）。
   给 `docker-compose.yml` 里所有 bind mount 追加 `,z`（如 `:ro,z`），
-  或执行 `sudo semanage fcontext -a -t container_file_t "/srv/ce/compilers(/.*)?" && sudo restorecon -R /srv/ce/compilers`。
+  或执行 `sudo semanage fcontext -a -t container_file_t "<CE_COMPILERS_ROOT>(/.*)?" && sudo restorecon -R <CE_COMPILERS_ROOT>`。
   （两个更新脚本里已内置受保护的 `chcon`，在 Enforcing 机器上会自动给新工具链目录打标签。）
 - **某编译器不出现在下拉框**：`docker compose logs ce | grep -i <名字>`；
-  多为 `exe` 路径不对或符号链接断。确认宿主机 `/srv/ce/compilers/*-latest` 指向有效目录。
+  多为 `exe` 路径不对或符号链接断。确认宿主机 `<CE_COMPILERS_ROOT>/*-latest` 指向有效目录。
 - **编译报找不到 libstdc++/启动文件**：检查 `c++.local.properties` 的
   `--gcc-toolchain=/opt/compiler-explorer/gcc-latest` 是否指向有效 GCC。
 - **MLIR fork 起不来**：多半缺运行库 → 设 `compiler.myopt.ldPath`（见上）。
