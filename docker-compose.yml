@@ -1,59 +1,40 @@
 name: ce
 
-# =============================================================================
-# CompilerExplorer 一键部署 / 更新（仅 CE 本体；nginx 用外部已有部署）
-#   docker compose up -d          # 启动
-#   docker compose restart ce     # 工具链或配置更新后重启 CE 生效
-#   docker compose build ce && docker compose up -d   # 更新 CE 本体
-#
-# 本文件 = 跑在 QEMU/KVM VM 内部（由 docker-compose.vm.yml 起的 VM）的 CE 栈，
-# 用普通 docker(runc) + 最小权限容器。隔离由 VM 边界提供，容器内无需 nsjail，
-# 也无需 SYS_ADMIN / 共享 cgroup。（若在装了 Kata 的专用机上直跑，可给 ce 加
-# 一行 `runtime: kata`，见 scripts/setup-kata.sh 与 README。）
-#
-# CE 只发布到 ${CE_BIND_ADDR:-127.0.0.1}:10240；VM 内经 QEMU hostfwd 暴露给宿主机回环，
-# 再由外部 nginx 反代对外（nginx 配置参考见 nginx/ce.conf）。
-# =============================================================================
+# Kata 备选路径；QEMU 主路径见 docker-compose.vm.yml。
 
 services:
   ce:
     build:
       context: .
-      # 更新 CE 版本: 改 Dockerfile 里的 ARG CE_REF, 或:
-      #   docker compose build --build-arg CE_REF=gh-<newer> ce
+      args:
+        CE_REF: "${CE_REF:-gh-18904}"
     image: ssct/compiler-explorer:local
     container_name: ce-app
     restart: unless-stopped
+    runtime: kata
 
-    # 非 root（与 Dockerfile 中创建的用户一致）。
     user: "10001:10001"
 
-    # ---- 最小权限（隔离由 Kata VM 提供，容器自身收紧到最严）----
     cap_drop: ["ALL"]
     security_opt:
       - no-new-privileges:true
-    read_only: true                      # 根文件系统只读
+    read_only: true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=2g   # 只编译 → 编译产物不用执行，noexec 可行
-    pids_limit: 2048                     # 无 nsjail 的 per-compile cgroup, 容器级挡 fork 炸弹
+      - /tmp:rw,noexec,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=1777
+      - /ce/lib/storage/data:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+      - /ce/out/compiler-cache:rw,noexec,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700
+    pids_limit: 2048
 
     volumes:
-      # 工具链：宿主机目录只读挂载。路径来自 .env 的 CE_COMPILERS_ROOT（compose 自动读取 .env）。
-      # 更新工具链 = 改 CE_COMPILERS_ROOT 指向的目录 + restart ce，零镜像重建。
-      # 若目标机开启 SELinux(Enforcing)，给挂载追加 ,z（如 :ro,z），否则容器读不到。
+      # SELinux Enforcing 时给此挂载追加 z。
       - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT（cp .env.example .env 后改实际路径）}:/opt/compiler-explorer:ro"
-      # 配置：单文件只读覆盖到 etc/config（保留仓内 defaults，仅叠加 local 覆盖）。
       - ./config/c++.local.properties:/ce/etc/config/c++.local.properties:ro
       - ./config/mlir.local.properties:/ce/etc/config/mlir.local.properties:ro
       - ./config/compiler-explorer.local.properties:/ce/etc/config/compiler-explorer.local.properties:ro
-      - ./config/execution.local.properties:/ce/etc/config/execution.local.properties:ro
+      # Kata 已提供 VM 边界，不启用容器内 nsjail。
 
     ports:
-      # 默认只绑回环：对外只经外部 nginx 暴露，CE 不直接对内网开放。
-      # 若 nginx 在另一台机器，把 127.0.0.1 换成宿主机内网 IP（.env 里 CE_BIND_ADDR）。
       - "${CE_BIND_ADDR:-127.0.0.1}:10240:10240"
 
-    # 资源上限（按 32C/30G 机器给，按需调整）。无 nsjail 时容器进程不迁移，
-    # 这两个限制 + pids_limit 对所有编译进程都生效。
     mem_limit: 6g
     cpus: 8
