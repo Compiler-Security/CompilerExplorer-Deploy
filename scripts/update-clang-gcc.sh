@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # =============================================================================
-# update-clang-gcc.sh —— 下载官方预编译 Clang/GCC 到宿主机工具链根，
+# update-clang-gcc.sh —— 下载预编译 Clang/GCC 到宿主机工具链根，
 #   并拨动 *-latest 符号链接 + 重启 CE。
 #
 #   用法:
-#     update-clang-gcc.sh clang          # 更新到最新 Clang/LLVM
-#     update-clang-gcc.sh gcc            # 更新到最新 GCC
-#     update-clang-gcc.sh all            # 两者
+#     update-clang-gcc.sh clang          # 最新 Clang/LLVM (x86 宿主, 全后端含 RISC-V)
+#     update-clang-gcc.sh gcc            # 最新 GCC, x86_64 原生
+#     update-clang-gcc.sh gcc-riscv      # 最新 GCC, riscv64 交叉
+#     update-clang-gcc.sh all            # clang + 两种 gcc
 #
-# 说明（来源按你的网络/发行版调整）：
-#   * Clang/LLVM：官方 GitHub Release 提供 Linux-X64 预编译 tarball。
-#   * GCC：gcc.gnu.org 不提供通用 x86_64 Linux 二进制 tarball。常见来源：
-#       - 发行版包（Fedora: dnf；Ubuntu: apt/PPA）解包；
-#       - Bootlin 预编译工具链；
-#       - 你们内部镜像/制品库里的 GCC 包。
-#     下面 GCC 段用「配置 URL 模板」的方式实现，默认留空由你填内部可用地址。
+# 来源（都可用环境变量覆盖成你们的内部镜像）：
+#   * Clang/LLVM：官方 llvm-project GitHub Release 的 Linux-X64 tarball。
+#       —— 它默认启用全部后端（含 RISC-V），同一份 clang 加 --target 即可交叉。
+#   * GCC：gcc.gnu.org 只发源码。默认用 prepkg/gcc-toolchain（GCC 最新,
+#       glibc 2.17 基线 → 能在 Debian bookworm 容器里跑, 可重定位, 解压即用），
+#       覆盖 x86_64 / riscv64 等目标。备选 Bootlin（版本较旧）。
+#
+# 注意 prepkg/Bootlin 是「交叉式」布局：二进制带三元组前缀，
+#   即 <triple>/bin/<triple>-g++（解压并 strip 顶层后为 <dest>/bin/<triple>-g++），
+#   CE 配置里的 exe 要指向带前缀的那个（见 config/c++.local.properties）。
 # =============================================================================
 set -euo pipefail
 
@@ -32,11 +36,11 @@ trap 'rm -rf "${WORK}"' EXIT
 
 mkdir -p "${CE_COMPILERS_ROOT}"
 
-# ---- 可配置来源 -------------------------------------------------------------
-# Clang: 留空则自动取最新 LLVM release 的 Linux-X64 资产。
-CLANG_TARBALL_URL="${CLANG_TARBALL_URL:-}"
-# GCC: 填入你内部/镜像可用的 GCC 预编译 tarball 地址（含版本）。
-GCC_TARBALL_URL="${GCC_TARBALL_URL:-}"
+# ---- 可配置来源（留空则用下面的默认）-----------------------------------------
+CLANG_TARBALL_URL="${CLANG_TARBALL_URL:-}"                 # 默认: 自动取最新 LLVM release
+GCC_TARBALL_URL="${GCC_TARBALL_URL:-}"                     # 默认: prepkg x86_64
+GCC_RISCV_TARBALL_URL="${GCC_RISCV_TARBALL_URL:-}"         # 默认: prepkg riscv64
+PREPKG_BASE="https://github.com/prepkg/gcc-toolchain/releases/latest/download"
 
 restart_ce() {
   echo ">> 重启 CE"
@@ -92,28 +96,29 @@ update_clang() {
   point_link clang-latest "${dest}"
 }
 
+# update_gcc <triple> <link-name> <url-override>
+#   默认从 prepkg 下载 gcc-<triple>.tar.gz；解压后为 <dest>/bin/<triple>-g++。
 update_gcc() {
-  local url="${GCC_TARBALL_URL}"
-  if [[ -z "${url}" ]]; then
-    cat >&2 <<'EOF'
-错误: 未设置 GCC_TARBALL_URL。
-gcc.gnu.org 不提供通用 Linux 二进制 tarball。请设置 GCC_TARBALL_URL 指向你可用的
-GCC 预编译包（发行版包解包 / Bootlin 工具链 / 内部制品库），例如：
-  GCC_TARBALL_URL="https://your-mirror/gcc-15.2.0-x86_64.tar.xz" ./update-clang-gcc.sh gcc
-EOF
-    exit 1
-  fi
-  local dest="${CE_COMPILERS_ROOT}/gcc-$(date +%Y%m%d)"
+  local triple="$1" link="$2" override="${3:-}"
+  local url="${override:-${PREPKG_BASE}/gcc-${triple}.tar.gz}"
+  echo ">> GCC [${triple}] 来源: ${url}"
+  local dest="${CE_COMPILERS_ROOT}/gcc-${triple}-$(date +%Y%m%d)"
   install_tarball "${url}" "${dest}"
-  [[ -x "${dest}/bin/g++" ]] || { echo "错误: ${dest}/bin/g++ 不存在，请检查 tarball 结构/来源"; exit 1; }
-  point_link gcc-latest "${dest}"
+  [[ -x "${dest}/bin/${triple}-g++" ]] \
+    || { echo "错误: ${dest}/bin/${triple}-g++ 不存在，请检查 tarball 结构/来源"; exit 1; }
+  point_link "${link}" "${dest}"
 }
 
 case "${1:-all}" in
-  clang) update_clang; restart_ce ;;
-  gcc)   update_gcc;   restart_ce ;;
-  all)   update_clang; update_gcc; restart_ce ;;
-  *) echo "用法: $0 {clang|gcc|all}"; exit 2 ;;
+  clang)            update_clang ;;
+  gcc)              update_gcc x86_64-linux-gnu gcc-latest "${GCC_TARBALL_URL}" ;;
+  gcc-riscv|riscv)  update_gcc riscv64-linux-gnu gcc-riscv-latest "${GCC_RISCV_TARBALL_URL}" ;;
+  all)
+    update_clang
+    update_gcc x86_64-linux-gnu gcc-latest "${GCC_TARBALL_URL}"
+    update_gcc riscv64-linux-gnu gcc-riscv-latest "${GCC_RISCV_TARBALL_URL}"
+    ;;
+  *) echo "用法: $0 {clang|gcc|gcc-riscv|all}"; exit 2 ;;
 esac
-
+restart_ce
 echo ">> 完成。"

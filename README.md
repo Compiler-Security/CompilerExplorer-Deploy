@@ -1,9 +1,10 @@
 # 内网自托管 CompilerExplorer（Clang/LLVM + GCC + 自研 MLIR）
 
-一键 Docker 部署的 CompilerExplorer，内置三种可独立更新的工具链：
+一键 Docker 部署的 CompilerExplorer，内置可独立更新的工具链：
 
-- **Clang/LLVM**（官方预编译，最新版）
-- **GCC**（官方预编译，最新版）
+- **Clang/LLVM**（官方预编译，最新版；**全后端通用** —— 同一份 clang 加 `--target=riscv64-linux-gnu` 即可交叉 RISC-V）
+- **GCC x86_64 原生 + GCC riscv64 交叉**（prepkg 预编译，GCC 最新，glibc 2.17 基线可在容器内运行）
+- **Clang riscv64 交叉**（复用上面的 clang 二进制 + `--target`，无需单独下载）
 - **自研 MLIR**（你们 Jenkins 每次提交 build，自动发布生效）
 
 实例面向内网，**不加认证、不做 TLS**，但其余全部按公网标准加固：
@@ -17,7 +18,7 @@
 宿主机
  ├─ <CE_COMPILERS_ROOT>/              # 工具链根（只读挂进容器; 路径在 .env 配, 示例 /srv/ce/compilers）
  │    ├─ clang-<date>/  ← clang-latest (符号链接)
- │    ├─ gcc-<date>/    ← gcc-latest   (符号链接)
+ │    ├─ gcc-<triple>-<date>/ ← gcc-latest / gcc-riscv-latest (符号链接)
  │    └─ mlir-custom.<build#>/ ← mlir-custom (符号链接)
  │
  ├─ docker compose
@@ -45,10 +46,10 @@ cp .env.example .env
 
 # 1. 准备工具链目录（至少各放一份，并建好符号链接）
 mkdir -p "$(grep -E '^CE_COMPILERS_ROOT=' .env | cut -d= -f2)"
-#   - Clang/LLVM: 解压官方 tarball 为 clang-<date>，ln -s 指向 clang-latest
-#   - GCC:        解压为 gcc-<date>，ln -s 指向 gcc-latest
-#   - MLIR:       你们 Jenkins build 产物解压为 mlir-custom.<id>，ln -s 指向 mlir-custom
-#   也可直接用 scripts/update-clang-gcc.sh 自动下载 Clang。
+#   推荐直接用脚本自动下载 Clang 与两种 GCC（默认源：llvm-project 官方 release + prepkg）：
+scripts/update-clang-gcc.sh all        # 或分开: clang / gcc / gcc-riscv
+#   - MLIR: 你们 Jenkins build 产物解压为 mlir-custom.<id>，ln -s 指向 mlir-custom
+#   （想换成内部镜像源：用 CLANG_TARBALL_URL / GCC_TARBALL_URL / GCC_RISCV_TARBALL_URL 覆盖）
 
 # 2. nsjail 前置（一次性，root）：建 ce-compile/ce-sandbox cgroup + 放开 userns
 sudo scripts/setup-nsjail-cgroups.sh --install-systemd   # 装开机自启，重启不丢
@@ -76,7 +77,7 @@ docker compose logs -f ce
 | 对象 | 触发 | 命令 | 重建镜像 |
 |---|---|---|---|
 | **MLIR（自研）** | 每次提交 | Jenkins 调 `scripts/deploy-mlir.sh <产物目录> <build#>` | 否 |
-| **Clang/GCC** | 出新版 | `scripts/update-clang-gcc.sh {clang\|gcc\|all}` | 否 |
+| **Clang/GCC** | 出新版 | `scripts/update-clang-gcc.sh {clang\|gcc\|gcc-riscv\|all}` | 否 |
 | **CE 本体** | 上游新 release | `scripts/update-ce.sh gh-<tag>` | 是 |
 
 ### 接 Jenkins（MLIR 自动发布）
