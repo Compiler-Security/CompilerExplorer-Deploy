@@ -130,7 +130,7 @@ bash "${REPO_SRC}/scripts/apply-ce-patches.sh" \
 
 echo ">> 构建 CE（首次较慢）"
 cd "${CE_HOME}"
-npm ci --no-audit --no-fund
+CYPRESS_INSTALL_BINARY=0 npm ci --no-audit --no-fund
 npm run webpack
 npm run ts-compile
 npm prune --omit=dev

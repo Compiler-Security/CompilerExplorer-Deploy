@@ -17,7 +17,7 @@ RUN /tmp/apply-ce-patches.sh /ce /tmp/ce-patches
 RUN git rev-parse HEAD > git_hash \
  && printf '%s\n' "${CE_REF}" > release_build
 
-RUN npm ci --no-audit --no-fund
+RUN CYPRESS_INSTALL_BINARY=0 npm ci --no-audit --no-fund
 RUN npm run webpack && npm run ts-compile
 
 FROM node:22-bookworm-slim
