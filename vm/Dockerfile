@@ -4,7 +4,9 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       qemu-system-x86 qemu-utils genisoimage curl ca-certificates socat \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /share/compilers /share/sshpub \
+      /share/repo/config /share/repo/scripts /share/repo/vm
 
 WORKDIR /vm
 COPY --chmod=0755 entrypoint.sh /vm/entrypoint.sh

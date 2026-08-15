@@ -32,7 +32,10 @@ services:
     volumes:
       - vm-disk:/vm/disk
       - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT}:/share/compilers:ro"
-      - ./:/share/repo:ro
+      # guest 装配只需这三个目录，避免把 .env 与 .git 暴露给 VM。
+      - ./config:/share/repo/config:ro
+      - ./scripts:/share/repo/scripts:ro
+      - ./vm:/share/repo/vm:ro
       - "${CE_VM_SSH_PUBKEY:-/dev/null}:/share/sshpub/ce_vm_key.pub:ro"
 
     ports:

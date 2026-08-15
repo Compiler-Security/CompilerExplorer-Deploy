@@ -141,7 +141,7 @@ for f in c c++ lean llvm llvm_mir mlir compiler-explorer execution; do
   ln -sfn "${REPO_SRC}/config/${f}.local.properties" "${CE_HOME}/etc/config/${f}.local.properties"
 done
 
-CE_UID="${CE_UID}" CE_GID="${CE_GID}" bash "${REPO_SRC}/scripts/setup-nsjail-cgroups.sh" --install-systemd
+CE_UID="${CE_UID}" CE_GID="${CE_GID}" bash "${REPO_SRC}/vm/setup-nsjail-cgroups.sh" --install-systemd
 
 chown -R ce:ce "${CE_HOME}"
 cp "${REPO_SRC}/vm/ce.service" /etc/systemd/system/ce.service

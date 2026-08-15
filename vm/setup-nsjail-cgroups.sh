@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 创建 nsjail 使用的 ce-compile / ce-sandbox cgroup，可安装 systemd 持久化。
+# 在 VM 内创建 nsjail 使用的 ce-compile / ce-sandbox cgroup，可安装 systemd 持久化。
 set -euo pipefail
 
 CE_UID="${CE_UID:-10001}"
