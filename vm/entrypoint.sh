@@ -226,7 +226,7 @@ qemu-system-x86_64 \
   -device virtio-net-pci,netdev=n0 \
   -fsdev local,id=fscomp,path="${COMPILERS_SRC}",security_model=none,readonly=on \
   -device virtio-9p-pci,fsdev=fscomp,mount_tag=compilers \
-  -fsdev local,id=fsrepo,path="${REPO_SRC}",security_model=none,readonly=on \
+  -fsdev local,id=fsrepo,path="${REPO_SRC}",security_model=none,readonly=on,multidevs=remap \
   -device virtio-9p-pci,fsdev=fsrepo,mount_tag=cerepo \
   -monitor unix:"${MON_SOCK}",server,nowait \
   -display none -vga none -serial stdio &
