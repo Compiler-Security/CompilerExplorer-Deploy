@@ -11,16 +11,9 @@ prepare_toolchain_update
 
 GCC_TARBALL_URL="${GCC_TARBALL_URL:-}"
 GCC_RISCV_TARBALL_URL="${GCC_RISCV_TARBALL_URL:-}"
-GCC_SHA256="${GCC_SHA256:-}"
-GCC_RISCV_SHA256="${GCC_RISCV_SHA256:-}"
+GCC_SHA256="$(normalize_sha256 GCC_SHA256 "${GCC_SHA256:-}")"
+GCC_RISCV_SHA256="$(normalize_sha256 GCC_RISCV_SHA256 "${GCC_RISCV_SHA256:-}")"
 PREPKG_BASE="https://github.com/prepkg/gcc-toolchain/releases/latest/download"
-
-for checksum in "${GCC_SHA256}" "${GCC_RISCV_SHA256}"; do
-  [[ -z "${checksum}" || "${checksum}" =~ ^[[:xdigit:]]{64}$ ]] \
-    || { echo "错误: GCC SHA256 必须是 64 位十六进制。" >&2; exit 2; }
-done
-GCC_SHA256="${GCC_SHA256,,}"
-GCC_RISCV_SHA256="${GCC_RISCV_SHA256,,}"
 
 gcc_version_id() {
   local triple="$1" headers modified

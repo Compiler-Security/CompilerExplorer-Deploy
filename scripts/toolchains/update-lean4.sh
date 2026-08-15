@@ -12,10 +12,7 @@ prepare_toolchain_update
 
 REQUESTED_VERSION="${1:-latest}"
 LEAN4_ARCHIVE_URL="${LEAN4_ARCHIVE_URL:-}"
-LEAN4_SHA256="${LEAN4_SHA256:-}"
-[[ -z "${LEAN4_SHA256}" || "${LEAN4_SHA256}" =~ ^[[:xdigit:]]{64}$ ]] \
-  || { echo "错误: LEAN4_SHA256 必须是 64 位十六进制。" >&2; exit 2; }
-LEAN4_SHA256="${LEAN4_SHA256,,}"
+LEAN4_SHA256="$(normalize_sha256 LEAN4_SHA256 "${LEAN4_SHA256:-}")"
 
 version=""
 url="${LEAN4_ARCHIVE_URL}"
@@ -71,52 +68,10 @@ else
 fi
 
 expected_sha="${LEAN4_SHA256:-${api_sha}}"
-[[ -z "${expected_sha}" || "${expected_sha}" =~ ^[[:xdigit:]]{64}$ ]] \
-  || { echo "错误: release 返回的 Lean 4 SHA256 格式无效。" >&2; exit 1; }
-expected_sha="${expected_sha,,}"
+expected_sha="$(normalize_sha256 'Lean release digest' "${expected_sha}")"
 
-dest="${CE_COMPILERS_ROOT}/lean-${version}"
-link="${CE_COMPILERS_ROOT}/lean-latest"
-target_name="${dest##*/}"
-
-if [[ -x "${dest}/bin/lean" && -x "${dest}/bin/leanc" ]]; then
-  if [[ "$(readlink "${link}" 2>/dev/null || true)" == "${target_name}" ]]; then
-    echo ">> [跳过] Lean 4 ${version} 已安装，lean-latest 已正确指向它"
-  else
-    echo ">> [修复链接] lean-latest -> ${target_name}"
-    point_toolchain_link lean-latest "${dest}"
-    DID_CHANGE=1
-  fi
-else
-  echo ">> 下载 Lean 4 ${version}: ${url}"
-  archive="${TOOLCHAIN_WORK}/lean.tar.zst"
-  curl -fSL --retry 3 -o "${archive}" "${url}"
-  actual_sha="$(sha256sum "${archive}" | awk '{print $1}')"
-  if [[ -n "${expected_sha}" ]]; then
-    [[ "${actual_sha}" == "${expected_sha}" ]] \
-      || { echo "错误: Lean 4 SHA256 不匹配（期望 ${expected_sha} 实际 ${actual_sha}）。" >&2; exit 1; }
-    echo ">> SHA256 校验通过: ${actual_sha}"
-  else
-    echo ">> 警告: 未提供且 release 未返回 SHA256；本次下载哈希: ${actual_sha}" >&2
-  fi
-
-  TOOLCHAIN_PARTIAL="${CE_COMPILERS_ROOT}/.lean-${version}.partial.$$"
-  rm -rf -- "${TOOLCHAIN_PARTIAL}"
-  mkdir -p "${TOOLCHAIN_PARTIAL}"
-  zstd -dc "${archive}" | tar -xf - -C "${TOOLCHAIN_PARTIAL}" --strip-components=1
-  [[ -x "${TOOLCHAIN_PARTIAL}/bin/lean" && -x "${TOOLCHAIN_PARTIAL}/bin/leanc" ]] \
-    || { echo "错误: Lean 4 归档缺少 bin/lean 或 bin/leanc。" >&2; exit 1; }
-
-  [[ ! -e "${dest}" ]] || rm -rf -- "${dest}"
-  mv -T "${TOOLCHAIN_PARTIAL}" "${dest}"
-  TOOLCHAIN_PARTIAL=""
-  if command -v chcon >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" == "Enforcing" ]]; then
-    chcon -R -t container_file_t "${dest}" || true
-  fi
-
-  point_toolchain_link lean-latest "${dest}"
-  DID_CHANGE=1
-fi
+install_versioned_toolchain \
+  lean-latest lean "${version}" "${url}" "bin/lean bin/leanc" "${expected_sha}"
 
 lean_version="$(detect_semver "${CE_COMPILERS_ROOT}/lean-latest/bin/lean" --version)"
 sync_config_property lean.local.properties compiler.lean.name "Lean ${lean_version}"

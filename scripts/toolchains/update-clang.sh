@@ -9,10 +9,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 prepare_toolchain_update
 
 CLANG_TARBALL_URL="${CLANG_TARBALL_URL:-}"
-LLVM_SHA256="${LLVM_SHA256:-}"
-[[ -z "${LLVM_SHA256}" || "${LLVM_SHA256}" =~ ^[[:xdigit:]]{64}$ ]] \
-  || { echo "错误: LLVM_SHA256 必须是 64 位十六进制。" >&2; exit 2; }
-LLVM_SHA256="${LLVM_SHA256,,}"
+LLVM_SHA256="$(normalize_sha256 LLVM_SHA256 "${LLVM_SHA256:-}")"
 
 url="${CLANG_TARBALL_URL}"
 verid=""

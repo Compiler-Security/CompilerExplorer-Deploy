@@ -49,6 +49,13 @@ prepare_toolchain_update() {
   trap toolchain_cleanup EXIT
 }
 
+normalize_sha256() { # normalize_sha256 <variable-name> <value>
+  local name="$1" value="${2:-}"
+  [[ -z "${value}" || "${value}" =~ ^[[:xdigit:]]{64}$ ]] \
+    || { echo "错误: ${name} 必须是 64 位十六进制。" >&2; return 2; }
+  printf '%s\n' "${value,,}"
+}
+
 detect_semver() { # detect_semver <executable> [version-arguments...]
   local executable="$1" output
   shift
@@ -118,9 +125,24 @@ point_toolchain_link() { # point_toolchain_link <link-name> <target-dir>
   echo ">> ${name} -> ${target_name}"
 }
 
-install_toolchain_tarball() { # <url> <dest> <required-exe> [sha256] [signature-url]
-  local url="$1" dest="$2" required_exe="$3" expect_sha="${4:-}" sig_url="${5:-}"
-  local archive="${TOOLCHAIN_WORK}/pkg.tar" actual_sha
+toolchain_has_executables() { # toolchain_has_executables <root> <space-separated-paths>
+  local root="$1" executable
+  local -a executables
+  read -r -a executables <<< "$2"
+  ((${#executables[@]} > 0)) || return 1
+  for executable in "${executables[@]}"; do
+    [[ -x "${root}/${executable}" ]] || return 1
+  done
+}
+
+install_toolchain_tarball() { # <url> <dest> <required-exes> [sha256] [signature-url]
+  local url="$1" dest="$2" required_exes="$3" expect_sha="${4:-}" sig_url="${5:-}"
+  local url_path="${url%%\?*}" archive="${TOOLCHAIN_WORK}/pkg.tar" actual_sha
+  case "${url_path}" in
+    *.tar.zst) archive+=".zst" ;;
+    *.tar.xz) archive+=".xz" ;;
+    *.tar.gz|*.tgz) archive+=".gz" ;;
+  esac
 
   echo ">> 下载 ${url}"
   curl -fSL --retry 3 -o "${archive}" "${url}"
@@ -154,8 +176,8 @@ install_toolchain_tarball() { # <url> <dest> <required-exe> [sha256] [signature-
   rm -rf -- "${TOOLCHAIN_PARTIAL}"
   mkdir -p "${TOOLCHAIN_PARTIAL}"
   tar -xf "${archive}" -C "${TOOLCHAIN_PARTIAL}" --strip-components=1
-  [[ -x "${TOOLCHAIN_PARTIAL}/${required_exe}" ]] \
-    || { echo "错误: 归档缺少 ${required_exe}，保留现有工具链不变。" >&2; exit 1; }
+  toolchain_has_executables "${TOOLCHAIN_PARTIAL}" "${required_exes}" \
+    || { echo "错误: 归档缺少必要的可执行文件（${required_exes}），保留现有工具链不变。" >&2; exit 1; }
   [[ ! -e "${dest}" ]] || rm -rf -- "${dest}"
   mv -T "${TOOLCHAIN_PARTIAL}" "${dest}"
   TOOLCHAIN_PARTIAL=""
@@ -165,14 +187,14 @@ install_toolchain_tarball() { # <url> <dest> <required-exe> [sha256] [signature-
   fi
 }
 
-install_versioned_toolchain() { # <link> <dir-base> <version> <url> <exe> [sha256] [signature-url]
-  local link="$1" dirbase="$2" verid="$3" url="$4" exe="$5"
+install_versioned_toolchain() { # <link> <dir-base> <version> <url> <required-exes> [sha256] [signature-url]
+  local link="$1" dirbase="$2" verid="$3" url="$4" required_exes="$5"
   local expect_sha="${6:-}" sig_url="${7:-}" dest
   verid="${verid//[^A-Za-z0-9._-]/_}"
   [[ -n "${verid}" ]] || { echo "错误: 无法从下载地址得到安全的版本标识。" >&2; exit 1; }
   dest="${CE_COMPILERS_ROOT}/${dirbase}-${verid}"
 
-  if [[ -x "${dest}/${exe}" ]]; then
+  if toolchain_has_executables "${dest}" "${required_exes}"; then
     if [[ "$(readlink "${CE_COMPILERS_ROOT}/${link}" 2>/dev/null || true)" == "$(basename "${dest}")" ]]; then
       echo ">> [跳过] ${dirbase} 已是 ${verid}，${link} 已正确指向它"
       return
@@ -184,7 +206,7 @@ install_versioned_toolchain() { # <link> <dir-base> <version> <url> <exe> [sha25
   fi
 
   echo ">> [更新] ${dirbase} -> ${verid}"
-  install_toolchain_tarball "${url}" "${dest}" "${exe}" "${expect_sha}" "${sig_url}"
+  install_toolchain_tarball "${url}" "${dest}" "${required_exes}" "${expect_sha}" "${sig_url}"
   point_toolchain_link "${link}" "${dest}"
   DID_CHANGE=1
 }
