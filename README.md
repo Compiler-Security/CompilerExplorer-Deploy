@@ -1,6 +1,6 @@
 # 内网自托管 Compiler Explorer
 
-面向受信内网的 Compiler Explorer，提供 C/C++、Clang、LLVM IR、P4 语法高亮、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
+面向受信内网的 Compiler Explorer，提供 C/C++、Clang、Lean 4、LLVM IR、P4 语法高亮、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
 
 主路径是在 Docker 中启动 QEMU/KVM VM，CE 在 VM 内以非 root 用户运行，并用 nsjail 隔离每次编译。Kata Containers 是保留的备选路径。
 
@@ -115,12 +115,13 @@ stage('deploy to CE') {
 |---|---|
 | `config/c.local.properties` | C 的 Clang/GCC 与 riscv64 交叉编译 |
 | `config/c++.local.properties` | C++ 的 Clang/GCC、交叉编译与在线运行开关 |
+| `config/lean.local.properties` | Lean 4 及同工具链内的 `leanc` |
 | `config/llvm.local.properties` | LLVM IR 的 clang、`llc` 与 `opt` |
 | `config/mlir.local.properties` | 自研 `mlir-opt` / `mlir-translate` |
 | `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
 | `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
 
-默认通过 `restrictToLanguages=c,c++,llvm,mlir,p4` 只加载 C、C++、LLVM IR、MLIR 和 P4。P4 由装配阶段应用的小型 CE 源码补丁提供图标与 Monaco 语法高亮，不安装或替换编译器；编译仍使用部署方已有的定制工具链。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
+默认通过 `restrictToLanguages=c,c++,lean,llvm,mlir,p4` 只加载 C、C++、Lean、LLVM IR、MLIR 和 P4。P4 由装配阶段应用的小型 CE 源码补丁提供图标与 Monaco 语法高亮，不安装或替换编译器；编译仍使用部署方已有的定制工具链。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
 
 CE 源码定制以有序 patch 队列维护，QEMU 与 Kata 构建均通过 `scripts/apply-ce-patches.sh` 按四位数字前缀幂等应用 `vm/patches/*.patch`。新增补丁使用连续序号命名（如 `0002-description.patch`）；升级 `CE_REF` 时应先对新 tag 执行补丁检查。
 
