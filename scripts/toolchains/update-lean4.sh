@@ -118,4 +118,8 @@ else
   DID_CHANGE=1
 fi
 
+lean_version="$(detect_semver "${CE_COMPILERS_ROOT}/lean-latest/bin/lean" --version)"
+sync_config_property lean.local.properties compiler.lean.name "Lean ${lean_version}"
+sync_config_property lean.local.properties compiler.lean.semver "${lean_version}"
+
 finish_toolchain_update "Lean 4"

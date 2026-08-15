@@ -44,11 +44,11 @@ curl http://127.0.0.1:10240/api/compilers
 
 `scripts/toolchains/update-clang.sh` 安装的 LLVM 工具链同时提供 C/C++ 下的 Clang、`LLVM IR` 下的 clang/`opt`/`llc`，以及 `LLVM MIR` 下的 `llc`。MLIR 不随它自动提供；只有执行 `scripts/toolchains/deploy-mlir.sh` 并发布可用的 `mlir-custom` 后，CE 才会显示 `MLIR` 语言。
 
-Lean 4 更新器使用官方 `linux.tar.zst`（当前完整工具链约 575 MB），部署宿主机需安装 `python3` 与 `zstd`。
+Lean 4 更新器使用官方 `linux.tar.zst`（当前完整工具链约 575 MB），部署宿主机需安装 `python3` 与 `zstd`：`python3` 用于可靠解析 GitHub release JSON、定位下载资产及其摘要，`zstd` 用于解压官方 `.tar.zst` 工具链。
 
 Alive2 目前只预配置为 LLVM IR 的单文件工具，仓库不安装或更新它。`/opt/compiler-explorer/alive2-latest/bin/alive-tv` 不存在时，CE 会隐藏 Alive2，并在启动日志中记录预期的 `Unable to stat tools.alive2 tool binary` warning；以后将可执行文件部署到该路径并重启 CE，工具会自动出现。
 
-编译器名称显示明确版本：LLVM/Clang 22.1.8、GCC 16.2.0、Lean 4.33.0。以后更新到新版本时，需要同步调整对应配置中的 `semver` 和显式 `name`。
+编译器名称显示工具链的明确版本。各更新器会在安装后执行真实二进制检测版本，并原子同步对应配置中的 `semver` 和显式 `name`，不需要手工修改；版本升级会因此产生预期的配置 Git diff，便于审阅和提交。
 
 ### 更新
 

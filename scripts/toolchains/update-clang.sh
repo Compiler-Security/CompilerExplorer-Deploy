@@ -39,4 +39,17 @@ fi
 
 install_versioned_toolchain \
   clang-latest clang "${verid}" "${url}" bin/clang++ "${LLVM_SHA256}" "${url}.sig"
+
+clang_version="$(detect_semver "${CE_COMPILERS_ROOT}/clang-latest/bin/clang++" --version)"
+sync_config_property c.local.properties compiler.clang.semver "${clang_version}"
+sync_config_property c.local.properties compiler.riscv64-clang.semver "${clang_version}"
+sync_config_property c++.local.properties compiler.clang++.semver "${clang_version}"
+sync_config_property c++.local.properties compiler.riscv64-clang++.semver "${clang_version}"
+sync_config_property llvm.local.properties compiler.clang-ir.semver "${clang_version}"
+sync_config_property llvm.local.properties compiler.llc.name "llc ${clang_version}"
+sync_config_property llvm.local.properties compiler.llc.semver "${clang_version}"
+sync_config_property llvm.local.properties compiler.opt.name "opt ${clang_version}"
+sync_config_property llvm.local.properties compiler.opt.semver "${clang_version}"
+sync_config_property llvm_mir.local.properties compiler.mir-llc.semver "${clang_version}"
+
 finish_toolchain_update "Clang/LLVM"

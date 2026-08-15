@@ -19,6 +19,7 @@ fi
 DID_CHANGE=0
 TOOLCHAIN_WORK=""
 TOOLCHAIN_PARTIAL=""
+TOOLCHAIN_CONFIG_TEMP=""
 
 require_commands() {
   local name
@@ -36,6 +37,7 @@ lock_toolchains() {
 }
 
 toolchain_cleanup() {
+  [[ -z "${TOOLCHAIN_CONFIG_TEMP}" ]] || rm -f -- "${TOOLCHAIN_CONFIG_TEMP}"
   [[ -z "${TOOLCHAIN_PARTIAL}" ]] || rm -rf -- "${TOOLCHAIN_PARTIAL}"
   [[ -z "${TOOLCHAIN_WORK}" ]] || rm -rf -- "${TOOLCHAIN_WORK}"
 }
@@ -45,6 +47,64 @@ prepare_toolchain_update() {
   lock_toolchains
   TOOLCHAIN_WORK="$(mktemp -d)"
   trap toolchain_cleanup EXIT
+}
+
+detect_semver() { # detect_semver <executable> [version-arguments...]
+  local executable="$1" output
+  shift
+  [[ -x "${executable}" ]] \
+    || { echo "错误: 无法执行工具链二进制 ${executable}。" >&2; return 1; }
+  if ! output="$("${executable}" "$@" 2>&1)"; then
+    echo "错误: 无法读取 ${executable} 的版本。" >&2
+    return 1
+  fi
+  if [[ "${output}" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    echo "错误: ${executable} 的输出中没有 X.Y.Z 版本号。" >&2
+    return 1
+  fi
+}
+
+sync_config_property() { # sync_config_property <config-relative-file> <key> <value>
+  local relative_file="$1" key="$2" value="$3" config_root config_file status=0
+  config_root="$(readlink -m "${REPO_ROOT}/config")"
+  config_file="$(readlink -m "${config_root}/${relative_file}")"
+  [[ "${config_file}" == "${config_root}/"* && -f "${config_file}" ]] \
+    || { echo "错误: 配置文件不在仓库 config/ 内: ${relative_file}" >&2; return 1; }
+  [[ "${key}" =~ ^[A-Za-z0-9_.+:-]+$ ]] \
+    || { echo "错误: 配置属性名无效: ${key}" >&2; return 1; }
+  [[ "${value}" != *$'\n'* ]] \
+    || { echo "错误: 配置属性值不能包含换行: ${key}" >&2; return 1; }
+
+  TOOLCHAIN_CONFIG_TEMP="$(mktemp "${config_file}.tmp.XXXXXX")"
+  chmod --reference="${config_file}" "${TOOLCHAIN_CONFIG_TEMP}"
+  awk -v key="${key}" -v value="${value}" '
+    BEGIN { prefix = key "=" }
+    index($0, prefix) == 1 {
+      found++
+      if (found > 1) exit 3
+      print prefix value
+      next
+    }
+    { print }
+    END { if (found == 0) exit 2 }
+  ' "${config_file}" > "${TOOLCHAIN_CONFIG_TEMP}" || status=$?
+  case "${status}" in
+    0) ;;
+    2) echo "错误: ${relative_file} 缺少配置属性 ${key}。" >&2; return 1 ;;
+    3) echo "错误: ${relative_file} 中配置属性 ${key} 重复。" >&2; return 1 ;;
+    *) echo "错误: 无法更新 ${relative_file} 中的 ${key}。" >&2; return 1 ;;
+  esac
+
+  if cmp -s "${config_file}" "${TOOLCHAIN_CONFIG_TEMP}"; then
+    rm -f -- "${TOOLCHAIN_CONFIG_TEMP}"
+  else
+    mv -Tf "${TOOLCHAIN_CONFIG_TEMP}" "${config_file}"
+    DID_CHANGE=1
+    echo ">> 同步 ${relative_file}: ${key}=${value}"
+  fi
+  TOOLCHAIN_CONFIG_TEMP=""
 }
 
 point_toolchain_link() { # point_toolchain_link <link-name> <target-dir>

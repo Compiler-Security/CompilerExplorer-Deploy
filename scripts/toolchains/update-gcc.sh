@@ -32,7 +32,7 @@ gcc_version_id() {
 }
 
 update_gcc() { # update_gcc <triple> <link-name> <url-override> <sha256>
-  local triple="$1" link="$2" override="$3" checksum="$4" url verid
+  local triple="$1" link="$2" override="$3" checksum="$4" url verid gcc_version
   if [[ -n "${override}" ]]; then
     url="${override}"
     verid="$(basename "${url}")"
@@ -45,6 +45,20 @@ update_gcc() { # update_gcc <triple> <link-name> <url-override> <sha256>
   fi
   install_versioned_toolchain \
     "${link}" "gcc-${triple}" "${verid}" "${url}" "bin/${triple}-g++" "${checksum}"
+
+  gcc_version="$(detect_semver \
+    "${CE_COMPILERS_ROOT}/${link}/bin/${triple}-g++" -dumpfullversion -dumpversion)"
+  case "${triple}" in
+    x86_64-linux-gnu)
+      sync_config_property c.local.properties compiler.gcc.semver "${gcc_version}"
+      sync_config_property c++.local.properties compiler.g++.semver "${gcc_version}"
+      ;;
+    riscv64-linux-gnu)
+      sync_config_property c.local.properties compiler.riscv64-gcc.semver "${gcc_version}"
+      sync_config_property c++.local.properties compiler.riscv64-g++.semver "${gcc_version}"
+      ;;
+    *) echo "错误: 不支持同步配置的 GCC target: ${triple}" >&2; return 1 ;;
+  esac
 }
 
 case "${1:-all}" in
