@@ -56,9 +56,7 @@ guest 只读取仓库的 `config/`、`scripts/` 和 `vm/`，不会读取 `.env` 
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/ce_vm_key -N ''
-```
-
-```dotenv
+# 写入 .env：
 CE_VM_SSH_PORT=2223
 CE_VM_SSH_KEY=/path/to/ce_vm_key
 CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
@@ -87,18 +85,7 @@ docker compose down -v
 - Alive2 只预配置 `/opt/compiler-explorer/alive2-latest/bin/alive-tv`；缺少时菜单隐藏且启动 warning 属于预期。
 - P4 patch 只提供语言、图标和语法高亮，不安装编译器。
 
-主要配置：
-
-| 文件 | 内容 |
-|---|---|
-| `config/c.local.properties` | C 的 Clang/GCC 与 riscv64 交叉编译 |
-| `config/c++.local.properties` | C++ 的 Clang/GCC 与 riscv64 交叉编译 |
-| `config/lean.local.properties` | Lean 4 |
-| `config/llvm.local.properties` | LLVM IR 与 Alive2 |
-| `config/llvm_mir.local.properties` | LLVM MIR |
-| `config/mlir.local.properties` | 自研 MLIR |
-| `config/compiler-explorer.local.properties` | 语言范围、资源和安全限制 |
-| `config/execution.local.properties` | nsjail 配置 |
+语言配置集中在 `config/<语言>.local.properties`；全局资源与安全限制位于 `compiler-explorer.local.properties`，nsjail 入口位于 `execution.local.properties`。
 
 默认只允许编译，不运行用户程序。源码定制位于 `vm/patches/`，`scripts/apply-ce-patches.sh` 按四位数字前缀依次应用；升级 `CE_REF` 时需确认补丁仍可应用。
 
@@ -120,7 +107,7 @@ docker compose -f compose.kata.yaml up -d --build
 - 工具链在 QEMU 容器内是 `/share/compilers`，在 guest 内是 `/opt/compiler-explorer`。
 - 编译器未出现：检查对应相对 `*-latest` 软链和必要二进制，再重启 `ce.service`。
 - 配置未生效：检查 `/opt/ce/etc/config/*.local.properties` 是否指向 `/mnt/ce-repo/config/`。
-- nsjail 失败：检查 `ce-cgroups.service`、`/cefs` 和 `journalctl -u ce`；装配自检会输出详细 errno。
+- nsjail 失败：检查 `ce-cgroups.service`，并确认 `/sys/fs/cgroup/ce-{compile,sandbox}` 与 `/cefs` 存在；装配自检会输出详细 errno。
 - SELinux Enforcing 阻止读取：按 Compose 注释给只读 bind mount 添加 `z` 标签。
 
 端口只绑定回环，Compose 丢弃 capabilities 并启用 `no-new-privileges`。生产环境仍应固定已核对的镜像/工具链哈希，并在 nginx 层提供认证、TLS 和限流。
