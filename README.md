@@ -120,7 +120,7 @@ docker compose -f compose.kata.yaml up -d --build
 - 工具链在 QEMU 容器内是 `/share/compilers`，在 guest 内是 `/opt/compiler-explorer`。
 - 编译器未出现：检查对应相对 `*-latest` 软链和必要二进制，再重启 `ce.service`。
 - 配置未生效：检查 `/opt/ce/etc/config/*.local.properties` 是否指向 `/mnt/ce-repo/config/`。
-- nsjail 失败：检查 `ce-cgroups.service`、`/cefs` 和 `journalctl -u ce`。
+- nsjail 失败：检查 `ce-cgroups.service` 和 `journalctl -u ce`；装配自检会输出详细 errno。
 - SELinux Enforcing 阻止读取：按 Compose 注释给只读 bind mount 添加 `z` 标签。
 
 端口只绑定回环，Compose 丢弃 capabilities 并启用 `no-new-privileges`。生产环境仍应固定已核对的镜像/工具链哈希，并在 nginx 层提供认证、TLS 和限流。

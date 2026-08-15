@@ -43,9 +43,6 @@ apt-get install -y -qq --no-install-recommends \
   autoconf bison flex pkg-config libtool protobuf-compiler \
   libprotobuf-dev libnl-route-3-dev
 
-# CE 的 nsjail 配置把 /cefs 作为必需挂载；本部署不使用 CEFS，但仍需提供空挂载点。
-install -d -m 0755 /cefs
-
 # Node 22（CE 要求 >= 22.22.1）
 if [[ ! -x "${NODE_HOME}/bin/node" ]]; then
   if [[ -z "${NODE_VERSION}" ]]; then
@@ -148,7 +145,8 @@ echo ">> 验证 nsjail 编译器沙箱"
 NSJAIL_CONFIG="${CE_HOME}/etc/nsjail/compilers-and-tools.cfg"
 if ! runuser -u ce -- /usr/local/bin/nsjail --config "${NSJAIL_CONFIG}" -- /bin/true; then
   echo "错误: nsjail 编译器沙箱自检失败；输出详细诊断。" >&2
-  runuser -u ce -- /usr/local/bin/nsjail -v --config "${NSJAIL_CONFIG}" -- /bin/true || true
+  # 配置文件自身把日志级别设为 FATAL，因此 -v 必须放在 --config 后面覆盖它。
+  runuser -u ce -- /usr/local/bin/nsjail --config "${NSJAIL_CONFIG}" -v -- /bin/true || true
   exit 1
 fi
 
