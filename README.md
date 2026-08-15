@@ -93,6 +93,31 @@ FORCE_REPROVISION="$(date +%s%N)" docker compose up -d --force-recreate qemu
 
 guest 只读取仓库的 `config/`、`scripts/` 和 `vm/`，不会读取 `.env` 或 `.git`。
 
+### 修改后的最小操作
+
+| 修改内容 | 最小操作 | 会重建什么 |
+|---|---|---|
+| README 或其它纯文档 | 无 | 无 |
+| `nginx/ce.conf` | 检查配置并 reload nginx | 无 |
+| `config/*.local.properties` | 重启 `ce.service` | 仅 CE 进程，不重建 Docker 或磁盘 |
+| `CE_COMPILERS_ROOT` 中的工具链内容或 `*-latest` 软链 | 重启 `ce.service`；工具链更新脚本会自动处理 | 仅 CE 进程 |
+| `vm/sync-ce-config.sh` | 重启 `ce.service` | 仅 CE 进程 |
+| `vm/entrypoint.sh` | `docker compose restart qemu` | 重启容器和 guest；是否重建 overlay 由新入口逻辑判断 |
+| VM CPU/内存、端口、Docker 资源限制或工具链挂载路径 | `docker compose up -d --force-recreate qemu` | 仅 recreate 容器，不重建镜像或磁盘 |
+| `.env` 中的 `CE_REF`、Node、磁盘大小或 SSH 公钥配置 | `docker compose up -d --force-recreate qemu` | 自动重建 overlay，并重新构建 CE |
+| cloud-init、装配脚本、CE unit 或 patch | `docker compose restart qemu` | 自动重建 overlay，并重新构建 CE |
+| `vm/Dockerfile` 或 QEMU 镜像依赖 | `docker compose up -d --build --force-recreate qemu` | 重建 Docker 镜像并 recreate 容器；磁盘默认保留 |
+| Ubuntu 镜像 URL 或校验参数 | recreate QEMU 容器 | 自动替换 `base.img` 并重建 overlay |
+
+重启 CE 的管理命令为：
+
+```bash
+ssh -i "$CE_VM_SSH_KEY" -p "${CE_VM_SSH_PORT:-2223}" \
+  ce@127.0.0.1 'sudo systemctl restart ce.service'
+```
+
+若未配置 SSH 管理密钥，可执行 `docker compose restart qemu`，代价是整个 guest 会重启，但正常情况下不会重建 overlay。
+
 ## 更新
 
 | 内容 | 命令 |
