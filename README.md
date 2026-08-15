@@ -145,6 +145,7 @@ docker compose up -d --build
 - `10240` 或 SSH 端口冲突：释放占用；SSH 端口可通过 `CE_VM_SSH_PORT` 修改。
 - 查看装配日志：`docker compose -f docker-compose.vm.yml logs -f qemu`。
 - 查看 CE 服务：VM 内执行 `journalctl -u ce -e`。
+- `runChild(): Launching child process failed`：检查本次装配是否通过“验证 nsjail 编译器沙箱”；脚本会创建 CE 配置要求的空 `/cefs` 挂载点并在启动 CE 前执行真实自检。
 - 工具链在 QEMU 容器内位于 `/share/compilers`，在 guest 内位于 `/opt/compiler-explorer`；不要在 QEMU 容器里查后者。
 - 编译器未出现：检查对应 `*-latest` 是否为同目录相对软链，并重启 `ce.service`。
 - LLVM IR/MIR 未出现：分别检查 `clang-latest/bin/clang++` 与 `clang-latest/bin/llc`。
