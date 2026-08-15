@@ -137,7 +137,7 @@ npm prune --omit=dev
 npm cache clean --force
 
 # 配置走 9p 软链，修改后只需重启服务。
-for f in c c++ lean llvm mlir compiler-explorer execution; do
+for f in c c++ lean llvm llvm_mir mlir compiler-explorer execution; do
   ln -sfn "${REPO_SRC}/config/${f}.local.properties" "${CE_HOME}/etc/config/${f}.local.properties"
 done
 

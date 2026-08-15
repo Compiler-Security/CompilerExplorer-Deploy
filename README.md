@@ -1,6 +1,6 @@
 # 内网自托管 Compiler Explorer
 
-面向受信内网的 Compiler Explorer，提供 C/C++、Clang、Lean 4、LLVM IR、P4 语法高亮、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
+面向受信内网的 Compiler Explorer，提供 C/C++、Clang、Lean 4、LLVM IR、LLVM MIR、P4 语法高亮、x86_64 与 riscv64 GCC，以及 Jenkins 发布的自研 MLIR。默认不含认证和 TLS；外部 nginx 负责入口、限流与安全响应头。
 
 主路径是在 Docker 中启动 QEMU/KVM VM，CE 在 VM 内以非 root 用户运行，并用 nsjail 隔离每次编译。Kata Containers 是保留的备选路径。
 
@@ -42,11 +42,13 @@ curl http://127.0.0.1:10240/api/compilers
 
 首次启动会下载 Ubuntu 26.04 云镜像，并在 VM 内安装 Node、nsjail 和 CE，耗时通常比后续启动长。
 
-`scripts/toolchains/update-clang.sh` 安装的 LLVM 工具链同时提供 C/C++ 下的 Clang，以及 `LLVM IR` 语言下的 clang、`llc` 和 `opt`。MLIR 不随它自动提供；只有执行 `scripts/toolchains/deploy-mlir.sh` 并发布可用的 `mlir-custom` 后，CE 才会显示 `MLIR` 语言。
+`scripts/toolchains/update-clang.sh` 安装的 LLVM 工具链同时提供 C/C++ 下的 Clang、`LLVM IR` 下的 clang/`opt`/`llc`，以及 `LLVM MIR` 下的 `llc`。MLIR 不随它自动提供；只有执行 `scripts/toolchains/deploy-mlir.sh` 并发布可用的 `mlir-custom` 后，CE 才会显示 `MLIR` 语言。
 
 Lean 4 更新器使用官方 `linux.tar.zst`（当前完整工具链约 575 MB），部署宿主机需安装 `python3` 与 `zstd`。
 
 Alive2 目前只预配置为 LLVM IR 的单文件工具，仓库不安装或更新它。`/opt/compiler-explorer/alive2-latest/bin/alive-tv` 不存在时，CE 会隐藏 Alive2，并在启动日志中记录预期的 `Unable to stat tools.alive2 tool binary` warning；以后将可执行文件部署到该路径并重启 CE，工具会自动出现。
+
+编译器名称显示明确版本：LLVM/Clang 22.1.8、GCC 16.2.0、Lean 4.33.0。以后更新到新版本时，需要同步调整对应配置中的 `semver` 和显式 `name`。
 
 ### 更新
 
@@ -126,11 +128,12 @@ stage('deploy to CE') {
 | `config/c++.local.properties` | C++ 的 Clang/GCC、交叉编译与在线运行开关 |
 | `config/lean.local.properties` | Lean 4 及同工具链内的 `leanc` |
 | `config/llvm.local.properties` | LLVM IR 的 clang、`llc`、`opt` 与 Alive2 预配置 |
+| `config/llvm_mir.local.properties` | LLVM MIR 的 `llc` |
 | `config/mlir.local.properties` | 自研 `mlir-opt` / `mlir-translate` |
 | `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
 | `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
 
-默认通过 `restrictToLanguages=c,c++,lean,llvm,mlir,p4` 只加载 C、C++、Lean、LLVM IR、MLIR 和 P4。P4 由装配阶段应用的小型 CE 源码补丁提供图标与 Monaco 语法高亮，不安装或替换编译器；编译仍使用部署方已有的定制工具链。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
+默认通过 `restrictToLanguages=c,c++,lean,llvm,llvm_mir,mlir,p4` 只加载 C、C++、Lean、LLVM IR、LLVM MIR、MLIR 和 P4。P4 由装配阶段应用的小型 CE 源码补丁提供图标与 Monaco 语法高亮，不安装或替换编译器；编译仍使用部署方已有的定制工具链。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
 
 CE 源码定制以有序 patch 队列维护，QEMU 与 Kata 构建均通过 `scripts/apply-ce-patches.sh` 按四位数字前缀幂等应用 `vm/patches/*.patch`。新增补丁使用连续序号命名（如 `0002-description.patch`）；升级 `CE_REF` 时应先对新 tag 执行补丁检查。
 
@@ -159,6 +162,8 @@ Clang riscv64 找不到 C 库头文件时，按实际 GCC 包布局给 `group.cl
 - CE 未启动：查看 `docker compose -f docker-compose.vm.yml logs -f qemu`；VM 内可查 `journalctl -u ce -e`。
 - 编译器未出现在列表：确认 `CE_COMPILERS_ROOT/*-latest` 指向存在的同目录相对路径，并在更新工具链后重启 `ce.service` 刷新列表。
 - `LLVM IR` 不出现：确认 `clang-latest/bin/clang++` 可执行；旧 VM 还需存在 `/opt/ce/etc/config/llvm.local.properties` 软链。
+- `LLVM MIR` 不出现：确认 `clang-latest/bin/llc` 可执行；旧 VM 还需存在 `/opt/ce/etc/config/llvm_mir.local.properties` 软链。
+- `Lean` 不出现：确认 `lean-latest/bin/lean` 与 `bin/leanc` 可执行；没有 `lean-latest` 时先运行 `scripts/toolchains/update-lean4.sh`。
 - `Alive2` 不出现：这是未安装 `alive2-latest/bin/alive-tv` 时的预期行为；部署该可执行文件后重启 `ce.service`。
 - `MLIR` 不出现：它不是 Clang 包的默认附带项；先确认 `mlir-custom/bin/mlir-opt` 和 `mlir-translate` 均可执行。
 - 更新后仍显示旧结果：重启 `ce.service` 清理 CE 缓存。
