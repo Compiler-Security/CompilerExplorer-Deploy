@@ -21,7 +21,7 @@ docker compose -f docker-compose.vm.yml up -d --build qemu
 docker compose -f docker-compose.vm.yml logs -f qemu
 ```
 
-首次启动会下载 Ubuntu 26.04 云镜像，并在 VM 内安装 Node、nsjail 和 CE。完成后验证：
+首次启动会下载 Ubuntu 26.04 云镜像，并在 VM 内安装 Node、nsjail 和 CE。QEMU 启动逻辑与 cloud-init 直接来自仓库只读挂载；修改这些文件不需要重新构建 QEMU 工具镜像。完成后验证：
 
 ```bash
 curl http://127.0.0.1:10240/api/compilers
@@ -29,7 +29,9 @@ curl http://127.0.0.1:10240/api/compilers
 
 将 [nginx/ce.conf](nginx/ce.conf) 放进现有 nginx 的 `conf.d/`，修改 `server_name` 后 reload。
 
-工具链保存在 `CE_COMPILERS_ROOT`。虚拟磁盘保存在 Docker named volume `ce-vm_vm-disk`，不在 QEMU 容器可写层中。guest 只共享仓库的 `config/`、`scripts/` 和 `vm/`，不会读取 `.env` 或 `.git`。
+工具链保存在 `CE_COMPILERS_ROOT`。虚拟磁盘保存在 Docker named volume `ce-vm_vm-disk`，普通重启不会重建，也不在 QEMU 容器可写层中。guest 只共享仓库的 `config/`、`scripts/` 和 `vm/`，不会读取 `.env` 或 `.git`。
+
+配置和工具链不打包进虚拟磁盘：它们通过只读 9p 挂载实时提供给 guest。`ce.service` 每次启动都会同步全部 `config/*.local.properties` 链接，因此新增或删除语言配置后只需重启 CE。CE 源码、systemd unit、cloud-init 和 patch 属于持久化装配内容；这些输入变化时，入口脚本会保留基础云镜像缓存，只自动重建 overlay。
 
 ## 更新
 
@@ -40,7 +42,7 @@ curl http://127.0.0.1:10240/api/compilers
 | GCC | `scripts/toolchains/update-gcc.sh [x86_64\|riscv64\|all]` | 否 |
 | Lean 4 | `scripts/toolchains/update-lean4.sh [版本号\|latest]` | 否 |
 | 自研 MLIR | `scripts/toolchains/deploy-mlir.sh <产物目录> <build-id>` | 否 |
-| CE 本体 | `scripts/update-ce.sh gh-<release>` | 是 |
+| CE 本体、patch 或 VM 持久化装配 | `scripts/update-ce.sh gh-<release>` 或重启 QEMU | 自动 |
 
 标准工具链更新器使用版本目录和相对 `*-latest` 软链。安装后会读取真实二进制版本，原子同步 CE 配置；版本升级产生配置 Git diff 属于预期行为。统一入口只在全部更新结束后重启一次 CE。
 
@@ -56,7 +58,7 @@ CE_VM_SSH_KEY=/path/to/ce_vm_key
 CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 ```
 
-SSH 公钥、Node 版本或装配状态变化时，用新的令牌重建 overlay：
+磁盘大小、SSH 公钥、Node 版本或持久化装配输入变化时，下一次 QEMU 启动会自动重建 overlay。仅在装配失败恢复、磁盘状态异常或明确要求全新装配时使用一次性强制令牌：
 
 ```bash
 FORCE_REPROVISION="$(date +%s%N)" \
@@ -148,5 +150,6 @@ docker compose up -d --build
 - LLVM IR/MIR 未出现：分别检查 `clang-latest/bin/clang++` 与 `clang-latest/bin/llc`。
 - Lean 未出现：检查 `lean-latest/bin/lean` 和 `bin/leanc`。
 - MLIR 未出现：检查 `mlir-custom/bin/mlir-opt` 和 `bin/mlir-translate`。
-- 配置未生效：重启 `ce.service`；只有装配期参数需要 `FORCE_REPROVISION`。
+- 配置未生效：重启 `ce.service`，并检查 `/opt/ce/etc/config/*.local.properties` 是否指向 `/mnt/ce-repo/config/`。新增配置文件不需要重建 VM。
+- 更新到引入“装配输入指纹”的版本：执行一次 `docker compose -f docker-compose.vm.yml up -d --build --force-recreate qemu`；旧 overlay 会自动重建，基础云镜像仍保留。
 - SELinux Enforcing 阻止读取：按 Compose 注释给只读 bind mount 添加 `z` 标签。

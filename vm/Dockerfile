@@ -9,9 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       /share/repo/config /share/repo/scripts /share/repo/vm
 
 WORKDIR /vm
-COPY --chmod=0755 entrypoint.sh /vm/entrypoint.sh
-COPY cloud-init/ /vm/cloud-init/
-
 VOLUME ["/vm/disk"]
 
-ENTRYPOINT ["/vm/entrypoint.sh"]
+# 启动逻辑与 cloud-init 从只读仓库挂载读取；修改后不必重建 QEMU 工具镜像。
+ENTRYPOINT ["/bin/bash", "/share/repo/vm/entrypoint.sh"]

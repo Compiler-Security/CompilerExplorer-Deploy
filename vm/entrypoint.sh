@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 准备并启动 QEMU/KVM VM；CE_REF 变化或新 FORCE_REPROVISION 令牌会重建 overlay。
+# 准备并启动 QEMU/KVM VM；CE_REF 或装配输入变化时会重建 overlay。
 set -euo pipefail
 
 VM_CPUS="${VM_CPUS:-8}"
@@ -22,6 +22,7 @@ REPO_SRC="${REPO_SRC:?需指定仓库目录(容器内路径)}"
 FWD_PORT="${FWD_PORT:-10240}"
 SSH_FWD_PORT="${SSH_FWD_PORT:-2223}"
 SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-/vm/ssh/ce_vm_key.pub}"
+CLOUD_INIT_SRC="${REPO_SRC}/vm/cloud-init"
 
 DISK_DIR=/vm/disk
 BASE="${DISK_DIR}/base.img"
@@ -29,6 +30,7 @@ DISK="${DISK_DIR}/ce-vm.qcow2"
 SEED="${DISK_DIR}/seed.iso"
 REF_MARKER="${DISK_DIR}/.ce_ref"
 BASE_SOURCE_MARKER="${DISK_DIR}/.base_source"
+PROVISION_INPUT_MARKER="${DISK_DIR}/.provision_input"
 REPROVISION_MARKER="${DISK_DIR}/.reprovision_token"
 MON_SOCK="${DISK_DIR}/monitor.sock"
 mkdir -p "${DISK_DIR}"
@@ -52,8 +54,44 @@ fi
   || { echo "错误: VM_IMAGE_SHA256 必须是 64 位十六进制。" >&2; exit 2; }
 NODE_SHA256="${NODE_SHA256,,}"
 VM_IMAGE_SHA256="${VM_IMAGE_SHA256,,}"
+PUBKEY=""
+if [[ -f "${SSH_PUBKEY_FILE}" ]]; then
+  read -r key_type key_data _ < "${SSH_PUBKEY_FILE}" || true
+  if [[ "${key_type:-}" =~ ^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)$ \
+        && "${key_data:-}" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+    PUBKEY="${key_type} ${key_data}"
+  elif [[ -s "${SSH_PUBKEY_FILE}" ]]; then
+    echo "错误: SSH 公钥格式无效: ${SSH_PUBKEY_FILE}" >&2
+    exit 1
+  fi
+fi
 IMAGE_SOURCE_ID="$(printf '%s\n%s\n%s\n' "${VM_IMAGE_URL}" "${VM_IMAGE_SHA256}" "${VM_IMAGE_SHA256_URL}" \
   | sha256sum | awk '{print $1}')"
+
+provision_files=(
+  "${CLOUD_INIT_SRC}/meta-data"
+  "${CLOUD_INIT_SRC}/user-data"
+  "${REPO_SRC}/scripts/apply-ce-patches.sh"
+  "${REPO_SRC}/vm/ce.service"
+  "${REPO_SRC}/vm/provision-ce.sh"
+  "${REPO_SRC}/vm/setup-nsjail-cgroups.sh"
+)
+for provision_file in "${provision_files[@]}"; do
+  [[ -f "${provision_file}" ]] \
+    || { echo "错误: 缺少 VM 装配输入: ${provision_file}" >&2; exit 1; }
+done
+PROVISION_INPUT_ID="$({
+  printf 'disk_size=%s\nnode_version=%s\nnode_sha256=%s\nssh_pubkey=%s\n' \
+    "${VM_DISK_SIZE}" "${NODE_VERSION}" "${NODE_SHA256}" "${PUBKEY}"
+  for provision_file in "${provision_files[@]}"; do
+    printf '%s\t' "${provision_file#${REPO_SRC}/}"
+    sha256sum "${provision_file}" | awk '{print $1}'
+  done
+  while IFS= read -r -d '' provision_file; do
+    printf '%s\t' "${provision_file#${REPO_SRC}/}"
+    sha256sum "${provision_file}" | awk '{print $1}'
+  done < <(find "${REPO_SRC}/vm/patches" -maxdepth 1 -type f -name '*.patch' -print0 | sort -z)
+} | sha256sum | awk '{print $1}')"
 
 if [[ ! -c /dev/kvm ]]; then
   echo "错误: 容器内没有 /dev/kvm。请在 compose 里挂 --device /dev/kvm，" >&2
@@ -82,6 +120,12 @@ if [[ -f "${DISK}" && -f "${REF_MARKER}" && "$(cat "${REF_MARKER}")" != "${CE_RE
   rm -f "${DISK}"
 elif [[ -f "${DISK}" && ! -f "${REF_MARKER}" ]]; then
   echo ">> 现有 VM 磁盘缺少版本标记：为避免复用未知状态，重新装配"
+  rm -f "${DISK}"
+fi
+
+if [[ -f "${DISK}" && (! -f "${PROVISION_INPUT_MARKER}" \
+      || "$(cat "${PROVISION_INPUT_MARKER}")" != "${PROVISION_INPUT_ID}") ]]; then
+  echo ">> VM 装配脚本、服务或 patch 已变化：重建 overlay 以同步持久化内容"
   rm -f "${DISK}"
 fi
 
@@ -152,6 +196,7 @@ if [[ ! -f "${DISK}" ]]; then
     exit 1
   fi
   mv "${DISK_PARTIAL}" "${DISK}"
+  printf '%s\n' "${PROVISION_INPUT_ID}" > "${PROVISION_INPUT_MARKER}"
 fi
 if [[ -n "${REPROVISION_TOKEN_TO_RECORD}" ]]; then
   printf '%s\n' "${REPROVISION_TOKEN_TO_RECORD}" > "${REPROVISION_MARKER}"
@@ -160,18 +205,7 @@ fi
 echo ">> 生成 cloud-init seed（CE_REF=${CE_REF}）"
 TMPCD="$(mktemp -d)"
 trap 'rm -rf "${TMPCD}"' EXIT
-cp /vm/cloud-init/meta-data "${TMPCD}/meta-data"
-PUBKEY=""
-if [[ -f "${SSH_PUBKEY_FILE}" ]]; then
-  read -r key_type key_data _ < "${SSH_PUBKEY_FILE}" || true
-  if [[ "${key_type:-}" =~ ^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)$ \
-        && "${key_data:-}" =~ ^[A-Za-z0-9+/=]+$ ]]; then
-    PUBKEY="${key_type} ${key_data}"
-  elif [[ -s "${SSH_PUBKEY_FILE}" ]]; then
-    echo "错误: SSH 公钥格式无效: ${SSH_PUBKEY_FILE}" >&2
-    exit 1
-  fi
-fi
+cp "${CLOUD_INIT_SRC}/meta-data" "${TMPCD}/meta-data"
 if [[ -n "${PUBKEY}" ]]; then
   echo ">> 已注入 SSH 公钥（宿主可 ssh -p ${SSH_FWD_PORT} ce@127.0.0.1 进 VM）"
 else
@@ -191,7 +225,7 @@ awk -v ce_ref="${CE_REF}" -v node_version="${NODE_VERSION}" -v node_sha="${NODE_
     gsub(/__NODE_SHA256__/, node_sha)
     print
   }
-' /vm/cloud-init/user-data > "${TMPCD}/user-data"
+' "${CLOUD_INIT_SRC}/user-data" > "${TMPCD}/user-data"
 genisoimage -output "${SEED}" -volid cidata -joliet -rock "${TMPCD}/user-data" "${TMPCD}/meta-data"
 rm -rf "${TMPCD}"
 trap - EXIT
