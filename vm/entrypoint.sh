@@ -258,7 +258,7 @@ qemu-system-x86_64 \
   -drive file="${SEED}",if=virtio,media=cdrom,format=raw,readonly=on \
   -netdev user,id=n0,hostfwd=tcp::"${FWD_PORT}"-:10240,hostfwd=tcp::"${SSH_FWD_PORT}"-:22 \
   -device virtio-net-pci,netdev=n0 \
-  -fsdev local,id=fscomp,path="${COMPILERS_SRC}",security_model=none,readonly=on \
+  -fsdev local,id=fscomp,path="${COMPILERS_SRC}",security_model=none,readonly=on,multidevs=remap \
   -device virtio-9p-pci,fsdev=fscomp,mount_tag=compilers \
   -fsdev local,id=fsrepo,path="${REPO_SRC}",security_model=none,readonly=on,multidevs=remap \
   -device virtio-9p-pci,fsdev=fsrepo,mount_tag=cerepo \
