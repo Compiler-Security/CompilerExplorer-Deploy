@@ -3,11 +3,8 @@
 # 用法：update-toolchains.sh [Lean版本号|latest]
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ -f "${REPO_ROOT}/.env" ]]; then
-  set -a; # shellcheck disable=SC1091
-  source "${REPO_ROOT}/.env"; set +a
-fi
+# shellcheck source=toolchains/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/toolchains/lib.sh"
 
 LEAN_VERSION="${1:-latest}"
 [[ "$#" -le 1 ]] || { echo "用法: $0 [Lean版本号|latest]" >&2; exit 2; }
@@ -34,8 +31,6 @@ echo ">> 更新 Lean 4（${LEAN_VERSION}）"
 
 unset CE_DEFER_RESTART
 unset CE_RESTART_NEEDED_FILE
-# shellcheck source=toolchains/lib.sh
-source "${REPO_ROOT}/scripts/toolchains/lib.sh"
 if [[ -f "${RESTART_NEEDED_FILE}" ]]; then
   restart_ce_in_vm
 else
