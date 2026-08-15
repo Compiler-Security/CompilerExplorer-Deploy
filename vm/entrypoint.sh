@@ -28,7 +28,6 @@ DISK_DIR=/vm/disk
 BASE="${DISK_DIR}/base.img"
 DISK="${DISK_DIR}/ce-vm.qcow2"
 SEED="${DISK_DIR}/seed.iso"
-REF_MARKER="${DISK_DIR}/.ce_ref"
 BASE_SOURCE_MARKER="${DISK_DIR}/.base_source"
 PROVISION_INPUT_MARKER="${DISK_DIR}/.provision_input"
 REPROVISION_MARKER="${DISK_DIR}/.reprovision_token"
@@ -81,8 +80,8 @@ for provision_file in "${provision_files[@]}"; do
     || { echo "错误: 缺少 VM 装配输入: ${provision_file}" >&2; exit 1; }
 done
 PROVISION_INPUT_ID="$({
-  printf 'disk_size=%s\nnode_version=%s\nnode_sha256=%s\nssh_pubkey=%s\n' \
-    "${VM_DISK_SIZE}" "${NODE_VERSION}" "${NODE_SHA256}" "${PUBKEY}"
+  printf 'ce_ref=%s\ndisk_size=%s\nnode_version=%s\nnode_sha256=%s\nssh_pubkey=%s\n' \
+    "${CE_REF}" "${VM_DISK_SIZE}" "${NODE_VERSION}" "${NODE_SHA256}" "${PUBKEY}"
   for provision_file in "${provision_files[@]}"; do
     printf '%s\t' "${provision_file#${REPO_SRC}/}"
     sha256sum "${provision_file}" | awk '{print $1}'
@@ -99,39 +98,36 @@ if [[ ! -c /dev/kvm ]]; then
   exit 1
 fi
 
-if [[ -f "${BASE}" && -f "${BASE_SOURCE_MARKER}" \
-      && "$(cat "${BASE_SOURCE_MARKER}")" != "${IMAGE_SOURCE_ID}" ]]; then
+discard_overlay() {
+  rm -f -- "${DISK}" "${PROVISION_INPUT_MARKER}"
+}
+
+if [[ -f "${BASE}" \
+      && (! -f "${BASE_SOURCE_MARKER}" || "$(cat "${BASE_SOURCE_MARKER}")" != "${IMAGE_SOURCE_ID}") ]]; then
   echo ">> 云镜像来源或校验值已变化：刷新基础镜像并重建 VM 磁盘"
-  rm -f "${DISK}" "${BASE}" "${BASE_SOURCE_MARKER}"
+  discard_overlay
+  rm -f -- "${BASE}" "${BASE_SOURCE_MARKER}"
 fi
 
 REPROVISION_TOKEN_TO_RECORD=""
 if [[ "${FORCE_REPROVISION}" != "0" \
       && (! -f "${REPROVISION_MARKER}" || "$(cat "${REPROVISION_MARKER}")" != "${FORCE_REPROVISION}") ]]; then
   echo ">> 收到新的 FORCE_REPROVISION 请求（${FORCE_REPROVISION}）：重建 VM 磁盘一次"
-  rm -f "${DISK}"
+  discard_overlay
   REPROVISION_TOKEN_TO_RECORD="${FORCE_REPROVISION}"
 elif [[ "${FORCE_REPROVISION}" != "0" ]]; then
   echo ">> FORCE_REPROVISION 请求 ${FORCE_REPROVISION} 已执行过，本次不重复删盘"
 fi
 
-if [[ -f "${DISK}" && -f "${REF_MARKER}" && "$(cat "${REF_MARKER}")" != "${CE_REF}" ]]; then
-  echo ">> CE_REF 变化 ($(cat "${REF_MARKER}") -> ${CE_REF})，重建 VM 磁盘以重新装配"
-  rm -f "${DISK}"
-elif [[ -f "${DISK}" && ! -f "${REF_MARKER}" ]]; then
-  echo ">> 现有 VM 磁盘缺少版本标记：为避免复用未知状态，重新装配"
-  rm -f "${DISK}"
-fi
-
 if [[ -f "${DISK}" && (! -f "${PROVISION_INPUT_MARKER}" \
       || "$(cat "${PROVISION_INPUT_MARKER}")" != "${PROVISION_INPUT_ID}") ]]; then
-  echo ">> VM 装配脚本、服务或 patch 已变化：重建 overlay 以同步持久化内容"
-  rm -f "${DISK}"
+  echo ">> VM 装配未完成或输入已变化：重建 overlay"
+  discard_overlay
 fi
 
 if [[ -f "${DISK}" && ! -f "${BASE}" ]]; then
   echo ">> 基础镜像缺失，现有 overlay 无法使用：重新创建 VM 磁盘"
-  rm -f "${DISK}"
+  discard_overlay
 fi
 
 resolve_image_sha256() {
@@ -154,25 +150,9 @@ resolve_image_sha256() {
   printf '%s\n' "${expected,,}"
 }
 
-# 兼容旧版没有来源标记的 base.img。
-if [[ -f "${BASE}" && ! -f "${BASE_SOURCE_MARKER}" ]]; then
-  expected="$(resolve_image_sha256)"
-  if [[ -n "${expected}" ]]; then
-    actual="$(sha256sum "${BASE}" | awk '{print $1}')"
-    if [[ "${actual}" != "${expected}" ]]; then
-      echo ">> 旧基础镜像与当前校验值不符：重新下载并重建 VM 磁盘"
-      rm -f "${DISK}" "${BASE}"
-    else
-      echo ">> 旧基础镜像 SHA256 校验通过，继续复用"
-      printf '%s\n' "${IMAGE_SOURCE_ID}" > "${BASE_SOURCE_MARKER}"
-    fi
-  else
-    echo ">> 警告: 旧基础镜像没有来源标记且无可用哈希；继续复用。" >&2
-    printf '%s\n' "${IMAGE_SOURCE_ID}" > "${BASE_SOURCE_MARKER}"
-  fi
-fi
-
+PROVISION_PENDING=0
 if [[ ! -f "${DISK}" ]]; then
+  rm -f -- "${PROVISION_INPUT_MARKER}"
   if [[ ! -f "${BASE}" ]]; then
     expected="$(resolve_image_sha256)"
     echo ">> 下载云镜像 ${VM_IMAGE_URL}"
@@ -196,7 +176,7 @@ if [[ ! -f "${DISK}" ]]; then
     exit 1
   fi
   mv "${DISK_PARTIAL}" "${DISK}"
-  printf '%s\n' "${PROVISION_INPUT_ID}" > "${PROVISION_INPUT_MARKER}"
+  PROVISION_PENDING=1
 fi
 if [[ -n "${REPROVISION_TOKEN_TO_RECORD}" ]]; then
   printf '%s\n' "${REPROVISION_TOKEN_TO_RECORD}" > "${REPROVISION_MARKER}"
@@ -229,7 +209,6 @@ awk -v ce_ref="${CE_REF}" -v node_version="${NODE_VERSION}" -v node_sha="${NODE_
 genisoimage -output "${SEED}" -volid cidata -joliet -rock "${TMPCD}/user-data" "${TMPCD}/meta-data"
 rm -rf "${TMPCD}"
 trap - EXIT
-echo "${CE_REF}" > "${REF_MARKER}"
 
 echo ">> 启动 VM：${VM_CPUS}C / ${VM_MEM_MB}MB；CE=hostfwd:${FWD_PORT}->10240；SSH=hostfwd:${SSH_FWD_PORT}->22"
 echo ">> 9p 共享: compilers=${COMPILERS_SRC} (ro), cerepo=${REPO_SRC} (ro)"
@@ -265,4 +244,23 @@ qemu-system-x86_64 \
   -monitor unix:"${MON_SOCK}",server,nowait \
   -display none -vga none -serial stdio &
 QEMU_PID=$!
+
+if [[ "${PROVISION_PENDING}" == "1" ]]; then
+  echo ">> 等待首次装配完成后记录磁盘状态"
+  provision_ready=0
+  for ((attempt = 0; attempt < 360; attempt++)); do
+    if curl -fsS --max-time 3 "http://127.0.0.1:${FWD_PORT}/healthcheck" >/dev/null 2>&1; then
+      printf '%s\n' "${PROVISION_INPUT_ID}" > "${PROVISION_INPUT_MARKER}"
+      echo ">> VM 装配完成，已记录装配指纹"
+      provision_ready=1
+      break
+    fi
+    kill -0 "${QEMU_PID}" 2>/dev/null || break
+    sleep 5
+  done
+  if [[ "${provision_ready}" != "1" ]]; then
+    echo ">> 警告: VM 首次装配尚未成功；下次启动将重新创建 overlay。" >&2
+  fi
+fi
+
 wait "${QEMU_PID}"
