@@ -29,13 +29,67 @@ curl http://127.0.0.1:10240/api/compilers
 
 外部代理可使用 [nginx/ce.conf](nginx/ce.conf)，部署前修改 `server_name`。
 
-## 持久化与同步
+## Docker、系统镜像与 overlay
 
-- 工具链保存在 `CE_COMPILERS_ROOT`，通过只读 9p 挂载到 guest。
-- 基础镜像和 qcow2 overlay 保存在 Docker volume `ce-vm_vm-disk`；普通重启不会重建。
-- `ce.service` 每次启动都会重新链接全部 `config/*.local.properties`，所以配置增删只需重启 CE。
-- `CE_REF`、磁盘大小、Node、SSH 公钥、cloud-init、装配脚本、systemd unit 或 patch 变化时，会保留基础镜像并自动重建 overlay。
-- 首次装配只有在 CE 健康检查成功后才记录完成；中途失败的 overlay 会在下次启动时重建。
+本部署有四个独立层次，不能把“重建 Docker”和“重建 VM”混为一件事：
+
+| 层次 | 内容 | 什么时候需要或会重建 |
+|---|---|---|
+| QEMU Docker 镜像 `ssct/ce-qemu:local` | QEMU、curl、socat 等运行环境 | 仅 `vm/Dockerfile` 或其中安装的软件变化时需要重新 build；普通脚本和配置通过 bind mount 提供，不在镜像内 |
+| Docker 容器 `ce-vm` | 端口、挂载、资源限制和传给入口脚本的环境变量 | `compose.yaml` 或相关 `.env` 参数变化时需要 recreate；recreate 不会删除 named volume |
+| Ubuntu 基础镜像 `base.img` | 未装配 CE 的 Ubuntu 26.04 cloud image | 文件不存在，或 `VM_IMAGE_URL`、`VM_IMAGE_SHA256`、`VM_IMAGE_SHA256_URL` 变化时自动重新下载；来源标记缺失也会重新下载 |
+| CE overlay `ce-vm.qcow2` | Node、nsjail、CE checkout、npm 依赖和构建结果 | 装配指纹变化、上次装配失败、基础镜像缺失或收到新的强制令牌时自动重建 |
+
+基础镜像和 overlay 都位于 Docker volume `ce-vm_vm-disk`。工具链位于宿主机 `CE_COMPILERS_ROOT`，不属于任何 VM 磁盘，因此重建 overlay 不会重新下载工具链。
+
+### Docker 镜像与容器
+
+`docker compose restart qemu` 只重启现有容器：不会重新 build 镜像、不会重新读取 Compose 环境、不会删除磁盘。仓库挂载内容会立即可见，入口脚本会在容器启动时判断是否需要重建 overlay。
+
+以下变化只需要 recreate 容器，不需要重建 QEMU Docker 镜像：
+
+- VM CPU、内存、Docker 资源限制或端口变化。
+- `.env` 中传入容器的变量变化。
+- Compose 的挂载或安全设置变化。
+
+```bash
+docker compose up -d --force-recreate qemu
+```
+
+只有 `vm/Dockerfile` 或其中的软件依赖变化时才需要同时 rebuild Docker 镜像：
+
+```bash
+docker compose up -d --build --force-recreate qemu
+```
+
+### Ubuntu 基础镜像
+
+基础镜像不是本地构建的，而是下载并校验的。修改镜像 URL 或校验参数后，需 recreate 容器让新环境变量生效；入口脚本随后自动替换基础镜像，并同时重建依赖它的 overlay。
+
+只有明确需要删除全部 VM 磁盘和基础镜像缓存时才执行：
+
+```bash
+docker compose down -v
+```
+
+### CE overlay
+
+以下任一变化都会在下次 QEMU 启动时自动重建 overlay，并完整重装 Node、nsjail、CE，重新执行 `npm ci`、webpack 和 TypeScript 编译：
+
+- `CE_REF`、`VM_DISK_SIZE`、`NODE_VERSION` 或 `NODE_SHA256` 变化。
+- 注入的 SSH 公钥内容变化。
+- `vm/cloud-init/meta-data` 或 `vm/cloud-init/user-data` 变化。
+- `vm/provision-ce.sh`、`vm/setup-nsjail-cgroups.sh`、`vm/ce.service` 或 `scripts/apply-ce-patches.sh` 变化。
+- `vm/patches/*.patch` 新增、删除或内容变化。
+- 上次装配没有通过 CE 健康检查，缺少完成标记。
+- Ubuntu 基础镜像被替换或丢失。
+- 使用尚未执行过的 `FORCE_REPROVISION` 令牌。
+
+```bash
+FORCE_REPROVISION="$(date +%s%N)" docker compose up -d --force-recreate qemu
+```
+
+以下变化不会重建 overlay：修改 `config/*.local.properties`、更新外部工具链、调整 VM CPU/内存、普通重启或仅 recreate 容器。配置变化只需重启 `ce.service`；工具链更新脚本也只重启 CE。
 
 guest 只读取仓库的 `config/`、`scripts/` 和 `vm/`，不会读取 `.env` 或 `.git`。
 
@@ -62,17 +116,7 @@ CE_VM_SSH_KEY=/path/to/ce_vm_key
 CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 ```
 
-没有密钥时按脚本提示执行 `docker compose restart qemu`。仅在明确需要全新装配时使用一次性令牌：
-
-```bash
-FORCE_REPROVISION="$(date +%s%N)" docker compose up -d --force-recreate qemu
-```
-
-删除基础镜像和 overlay：
-
-```bash
-docker compose down -v
-```
+没有密钥时按脚本提示执行 `docker compose restart qemu`。
 
 ## 工具链与配置
 
