@@ -149,7 +149,14 @@ fi
 # shellcheck source=lib-vm.sh
 source "${REPO_ROOT}/scripts/lib-vm.sh"
 if [[ "${DID_CHANGE}" == "1" ]]; then
-  restart_ce_in_vm
+  if [[ "${CE_DEFER_RESTART:-0}" == "1" ]]; then
+    if [[ -n "${CE_RESTART_NEEDED_FILE:-}" ]]; then
+      : > "${CE_RESTART_NEEDED_FILE}"
+    fi
+    echo ">> CE 重启已交给统一工具链更新入口处理"
+  else
+    restart_ce_in_vm
+  fi
 else
   echo ">> Lean 4 工具链无需更新"
 fi

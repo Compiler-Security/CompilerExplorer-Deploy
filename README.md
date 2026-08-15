@@ -8,7 +8,7 @@
 
 ```text
 宿主机
-├─ CE_COMPILERS_ROOT/                  # Clang/LLVM/GCC/MLIR，9p 只读共享
+├─ CE_COMPILERS_ROOT/                  # Clang/LLVM/GCC/Lean/MLIR，9p 只读共享
 ├─ docker-compose.vm.yml
 │  └─ QEMU/KVM VM
 │     └─ CE + systemd + nsjail
@@ -26,8 +26,7 @@
 cp .env.example .env
 # 编辑 .env，至少设置 CE_COMPILERS_ROOT
 
-scripts/update-clang-gcc.sh all
-scripts/update-lean4.sh
+scripts/update-toolchains.sh
 # 自研 MLIR：scripts/deploy-mlir.sh <产物目录> <build-id>
 
 docker compose -f docker-compose.vm.yml build qemu
@@ -51,11 +50,14 @@ Lean 4 更新器使用官方 `linux.tar.zst`（当前完整工具链约 575 MB�
 
 | 内容 | 命令 | 是否重建 VM |
 |---|---|---|
+| 全部标准工具链 | `scripts/update-toolchains.sh [Lean版本号\|latest]` | 否 |
 | Clang/GCC | `scripts/update-clang-gcc.sh {clang\|gcc\|gcc-riscv\|all}` | 否 |
 | Lean 4 | `scripts/update-lean4.sh [版本号\|latest]` | 否 |
 | 自研 MLIR | `scripts/deploy-mlir.sh <产物目录> <build-id>` | 否 |
 | CE 本体 | `scripts/update-ce.sh gh-<release>` | 是 |
 | 覆盖配置 | 修改 `config/*.local.properties` 后重启 `ce.service` | 否 |
+
+`update-toolchains.sh` 依次更新 Clang、x86_64 GCC、riscv64 GCC 和 Lean 4，并在发生变化后只重启一次 CE。自研 MLIR 由 Jenkins 和 `deploy-mlir.sh` 发布，不包含在统一更新中。
 
 工具链通过相对软链和 9p 共享给 VM，但 CE 进程需要重启才能重新扫描编译器列表。若 `.env` 配置了 `CE_VM_SSH_KEY`，更新脚本会 best-effort 重启 CE；未配置时可重启 QEMU 容器，或手动执行：
 

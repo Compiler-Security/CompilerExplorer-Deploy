@@ -195,7 +195,14 @@ case "${1:-all}" in
 esac
 
 if [[ "${DID_CHANGE}" == "1" ]]; then
-  restart_ce_in_vm
+  if [[ "${CE_DEFER_RESTART:-0}" == "1" ]]; then
+    if [[ -n "${CE_RESTART_NEEDED_FILE:-}" ]]; then
+      : > "${CE_RESTART_NEEDED_FILE}"
+    fi
+    echo ">> CE 重启已交给统一工具链更新入口处理"
+  else
+    restart_ce_in_vm
+  fi
 else
   echo ">> 所有工具链均已是最新，无需重启 CE"
 fi
