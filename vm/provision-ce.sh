@@ -136,10 +136,8 @@ npm run ts-compile
 npm prune --omit=dev
 npm cache clean --force
 
-# 配置走 9p 软链，修改后只需重启服务。
-for f in c c++ lean llvm llvm_mir mlir compiler-explorer execution; do
-  ln -sfn "${REPO_SRC}/config/${f}.local.properties" "${CE_HOME}/etc/config/${f}.local.properties"
-done
+# 配置走 9p 软链；服务每次启动还会重新同步，新增语言无需再次装配 VM。
+bash "${REPO_SRC}/vm/sync-ce-config.sh" "${CE_HOME}" "${REPO_SRC}"
 
 CE_UID="${CE_UID}" CE_GID="${CE_GID}" bash "${REPO_SRC}/vm/setup-nsjail-cgroups.sh" --install-systemd
 

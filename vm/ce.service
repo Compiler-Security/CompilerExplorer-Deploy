@@ -14,6 +14,7 @@ WorkingDirectory=/opt/ce
 Environment=NODE_ENV=production
 Environment=TMPDIR=/tmp
 Environment=PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStartPre=/usr/bin/bash /mnt/ce-repo/vm/sync-ce-config.sh /opt/ce /mnt/ce-repo
 ExecStart=/opt/node/bin/node /opt/ce/out/dist/app.js --static /opt/ce/out/webpack/static --host 0.0.0.0 --port 10240
 Restart=always
 RestartSec=3
