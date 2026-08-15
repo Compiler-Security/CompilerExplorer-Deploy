@@ -38,7 +38,7 @@ fi
 
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
-  git build-essential python3 ca-certificates curl xz-utils \
+  git build-essential python3 ca-certificates curl xz-utils openssh-server \
   cgroup-tools \
   autoconf bison flex pkg-config libtool protobuf-compiler \
   libprotobuf-dev libnl-route-3-dev

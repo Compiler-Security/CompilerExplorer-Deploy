@@ -3,12 +3,6 @@
 hostname: ce-vm
 preserve_hostname: false
 
-package_update: true
-packages:
-  - curl
-  - ca-certificates
-  - openssh-server
-
 users:
   - name: ce
     uid: 10001
