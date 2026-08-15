@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 统一更新标准工具链；自研 MLIR 仍由 deploy-mlir.sh 发布。
+# 统一更新标准工具链；自研 MLIR 仍由 scripts/toolchains/deploy-mlir.sh 发布。
 # 用法：update-toolchains.sh [Lean版本号|latest]
 set -euo pipefail
 
@@ -23,11 +23,14 @@ trap cleanup EXIT
 export CE_DEFER_RESTART=1
 export CE_RESTART_NEEDED_FILE="${RESTART_NEEDED_FILE}"
 
-echo ">> 更新 Clang、x86_64 GCC 与 riscv64 GCC"
-"${REPO_ROOT}/scripts/update-clang-gcc.sh" all
+echo ">> 更新 Clang/LLVM"
+"${REPO_ROOT}/scripts/toolchains/update-clang.sh"
+
+echo ">> 更新 x86_64 GCC 与 riscv64 GCC"
+"${REPO_ROOT}/scripts/toolchains/update-gcc.sh" all
 
 echo ">> 更新 Lean 4（${LEAN_VERSION}）"
-"${REPO_ROOT}/scripts/update-lean4.sh" "${LEAN_VERSION}"
+"${REPO_ROOT}/scripts/toolchains/update-lean4.sh" "${LEAN_VERSION}"
 
 unset CE_DEFER_RESTART
 unset CE_RESTART_NEEDED_FILE

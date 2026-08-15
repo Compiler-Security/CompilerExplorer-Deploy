@@ -1,25 +1,14 @@
 #!/usr/bin/env bash
-# 幂等更新 Lean 4 官方 Linux 工具链并原子切换 lean-latest。
+# 幂等更新 Lean 4 官方 Linux 工具链，并原子切换 lean-latest。
 # 用法：update-lean4.sh [版本号|latest]（默认 latest）
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ -z "${CE_COMPILERS_ROOT:-}" && -f "${REPO_ROOT}/.env" ]]; then
-  set -a; # shellcheck disable=SC1091
-  source "${REPO_ROOT}/.env"; set +a
-fi
-: "${CE_COMPILERS_ROOT:?未设置 CE_COMPILERS_ROOT。请 cp .env.example .env 并填入实际路径，或用环境变量传入。}"
+[[ "$#" -le 1 ]] || { echo "用法: $0 [版本号|latest]" >&2; exit 2; }
 
-CE_COMPILERS_ROOT="$(readlink -m "${CE_COMPILERS_ROOT}")"
-if [[ -z "${CE_COMPILERS_ROOT}" || "${CE_COMPILERS_ROOT}" == "/" ]]; then
-  echo "错误: CE_COMPILERS_ROOT 为空或为根目录，已拒绝。" >&2
-  exit 1
-fi
-
-for command in curl flock python3 sha256sum tar zstd; do
-  command -v "${command}" >/dev/null 2>&1 \
-    || { echo "错误: 缺少命令 ${command}。Lean 官方 tar.zst 解压需要 zstd。" >&2; exit 1; }
-done
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+require_commands python3 zstd
+prepare_toolchain_update
 
 REQUESTED_VERSION="${1:-latest}"
 LEAN4_ARCHIVE_URL="${LEAN4_ARCHIVE_URL:-}"
@@ -86,36 +75,21 @@ expected_sha="${LEAN4_SHA256:-${api_sha}}"
   || { echo "错误: release 返回的 Lean 4 SHA256 格式无效。" >&2; exit 1; }
 expected_sha="${expected_sha,,}"
 
-mkdir -p "${CE_COMPILERS_ROOT}"
-exec 9>"${CE_COMPILERS_ROOT}/.update.lock"
-flock 9
-
-WORK="$(mktemp -d)"
-PARTIAL=""
-cleanup() {
-  [[ -z "${PARTIAL}" ]] || rm -rf -- "${PARTIAL}"
-  rm -rf -- "${WORK}"
-}
-trap cleanup EXIT
-
 dest="${CE_COMPILERS_ROOT}/lean-${version}"
 link="${CE_COMPILERS_ROOT}/lean-latest"
 target_name="${dest##*/}"
-DID_CHANGE=0
 
 if [[ -x "${dest}/bin/lean" && -x "${dest}/bin/leanc" ]]; then
   if [[ "$(readlink "${link}" 2>/dev/null || true)" == "${target_name}" ]]; then
     echo ">> [跳过] Lean 4 ${version} 已安装，lean-latest 已正确指向它"
   else
     echo ">> [修复链接] lean-latest -> ${target_name}"
-    tmp_link="${CE_COMPILERS_ROOT}/.lean-latest.tmp.$$"
-    ln -s "${target_name}" "${tmp_link}"
-    mv -Tf "${tmp_link}" "${link}"
+    point_toolchain_link lean-latest "${dest}"
     DID_CHANGE=1
   fi
 else
   echo ">> 下载 Lean 4 ${version}: ${url}"
-  archive="${WORK}/lean.tar.zst"
+  archive="${TOOLCHAIN_WORK}/lean.tar.zst"
   curl -fSL --retry 3 -o "${archive}" "${url}"
   actual_sha="$(sha256sum "${archive}" | awk '{print $1}')"
   if [[ -n "${expected_sha}" ]]; then
@@ -126,38 +100,22 @@ else
     echo ">> 警告: 未提供且 release 未返回 SHA256；本次下载哈希: ${actual_sha}" >&2
   fi
 
-  PARTIAL="${CE_COMPILERS_ROOT}/.lean-${version}.partial.$$"
-  mkdir -p "${PARTIAL}"
-  zstd -dc "${archive}" | tar -xf - -C "${PARTIAL}" --strip-components=1
-  [[ -x "${PARTIAL}/bin/lean" && -x "${PARTIAL}/bin/leanc" ]] \
+  TOOLCHAIN_PARTIAL="${CE_COMPILERS_ROOT}/.lean-${version}.partial.$$"
+  rm -rf -- "${TOOLCHAIN_PARTIAL}"
+  mkdir -p "${TOOLCHAIN_PARTIAL}"
+  zstd -dc "${archive}" | tar -xf - -C "${TOOLCHAIN_PARTIAL}" --strip-components=1
+  [[ -x "${TOOLCHAIN_PARTIAL}/bin/lean" && -x "${TOOLCHAIN_PARTIAL}/bin/leanc" ]] \
     || { echo "错误: Lean 4 归档缺少 bin/lean 或 bin/leanc。" >&2; exit 1; }
 
   [[ ! -e "${dest}" ]] || rm -rf -- "${dest}"
-  mv -T "${PARTIAL}" "${dest}"
-  PARTIAL=""
+  mv -T "${TOOLCHAIN_PARTIAL}" "${dest}"
+  TOOLCHAIN_PARTIAL=""
   if command -v chcon >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" == "Enforcing" ]]; then
     chcon -R -t container_file_t "${dest}" || true
   fi
 
-  tmp_link="${CE_COMPILERS_ROOT}/.lean-latest.tmp.$$"
-  ln -s "${target_name}" "${tmp_link}"
-  mv -Tf "${tmp_link}" "${link}"
-  echo ">> lean-latest -> ${target_name}"
+  point_toolchain_link lean-latest "${dest}"
   DID_CHANGE=1
 fi
 
-# shellcheck source=lib-vm.sh
-source "${REPO_ROOT}/scripts/lib-vm.sh"
-if [[ "${DID_CHANGE}" == "1" ]]; then
-  if [[ "${CE_DEFER_RESTART:-0}" == "1" ]]; then
-    if [[ -n "${CE_RESTART_NEEDED_FILE:-}" ]]; then
-      : > "${CE_RESTART_NEEDED_FILE}"
-    fi
-    echo ">> CE 重启已交给统一工具链更新入口处理"
-  else
-    restart_ce_in_vm
-  fi
-else
-  echo ">> Lean 4 工具链无需更新"
-fi
-echo ">> 完成。"
+finish_toolchain_update "Lean 4"
