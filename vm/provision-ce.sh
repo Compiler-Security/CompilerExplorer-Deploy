@@ -43,6 +43,9 @@ apt-get install -y -qq --no-install-recommends \
   autoconf bison flex pkg-config libtool protobuf-compiler \
   libprotobuf-dev libnl-route-3-dev
 
+# 上游 nsjail 配置要求该挂载源存在；本部署不使用 CEFS，仅提供空目录。
+install -d -m 0755 /cefs
+
 # Node 22（CE 要求 >= 22.22.1）
 if [[ ! -x "${NODE_HOME}/bin/node" ]]; then
   if [[ -z "${NODE_VERSION}" ]]; then
