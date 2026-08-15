@@ -1,0 +1,9 @@
+.git
+.env
+data/
+compilers/
+*.img
+*.iso
+*.log
+*.qcow2
+*.tar*

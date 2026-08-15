@@ -1,6 +1,10 @@
 .env
 
-compilers/
+/compilers/
+/data/
+*.img
+*.iso
+*.qcow2
 *.tar*
 *.log
 
