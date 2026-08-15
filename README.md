@@ -122,6 +122,8 @@ stage('deploy to CE') {
 
 默认通过 `restrictToLanguages=c,c++,llvm,mlir,p4` 只加载 C、C++、LLVM IR、MLIR 和 P4。P4 由装配阶段应用的小型 CE 源码补丁提供 Monaco 语法高亮，不安装或替换编译器；编译仍使用部署方已有的定制工具链。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
 
+CE 源码定制以有序 patch 队列维护，QEMU 与 Kata 构建均通过 `scripts/apply-ce-patches.sh` 按四位数字前缀幂等应用 `vm/patches/*.patch`。新增补丁使用连续序号命名（如 `0002-description.patch`）；升级 `CE_REF` 时应先对新 tag 执行补丁检查。
+
 默认只允许编译，不运行用户程序。若需要开放 x86_64 产物执行，将 `supportsExecute` 改为 `true` 后重启 CE；riscv64 产物仍需 qemu-user。
 
 MLIR 默认 pass 或运行库路径可在 `config/mlir.local.properties` 中设置：

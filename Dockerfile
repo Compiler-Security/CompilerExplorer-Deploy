@@ -9,10 +9,9 @@ WORKDIR /ce
 RUN git clone --depth 1 --branch "${CE_REF}" \
       https://github.com/compiler-explorer/compiler-explorer.git .
 
-COPY vm/patches/ce-p4-syntax.patch /tmp/ce-p4-syntax.patch
-RUN git apply --check /tmp/ce-p4-syntax.patch \
- && git apply /tmp/ce-p4-syntax.patch \
- && rm /tmp/ce-p4-syntax.patch
+COPY --chmod=0755 scripts/apply-ce-patches.sh /tmp/apply-ce-patches.sh
+COPY vm/patches/ /tmp/ce-patches/
+RUN /tmp/apply-ce-patches.sh /ce /tmp/ce-patches
 
 # 运行镜像不保留 .git，预先生成 dist 版本元数据。
 RUN git rev-parse HEAD > git_hash \
