@@ -27,6 +27,7 @@ cp .env.example .env
 # 编辑 .env，至少设置 CE_COMPILERS_ROOT
 
 scripts/update-clang-gcc.sh all
+scripts/update-lean4.sh
 # 自研 MLIR：scripts/deploy-mlir.sh <产物目录> <build-id>
 
 docker compose -f docker-compose.vm.yml build qemu
@@ -44,16 +45,19 @@ curl http://127.0.0.1:10240/api/compilers
 
 `update-clang-gcc.sh clang` 安装的 LLVM 工具链同时提供 C/C++ 下的 Clang，以及 `LLVM IR` 语言下的 clang、`llc` 和 `opt`。MLIR 不随它自动提供；只有执行 `deploy-mlir.sh` 并发布可用的 `mlir-custom` 后，CE 才会显示 `MLIR` 语言。
 
+Lean 4 更新器使用官方 `linux.tar.zst`（当前完整工具链约 575 MB），部署宿主机需安装 `python3` 与 `zstd`。
+
 ### 更新
 
 | 内容 | 命令 | 是否重建 VM |
 |---|---|---|
 | Clang/GCC | `scripts/update-clang-gcc.sh {clang\|gcc\|gcc-riscv\|all}` | 否 |
+| Lean 4 | `scripts/update-lean4.sh [版本号\|latest]` | 否 |
 | 自研 MLIR | `scripts/deploy-mlir.sh <产物目录> <build-id>` | 否 |
 | CE 本体 | `scripts/update-ce.sh gh-<release>` | 是 |
 | 覆盖配置 | 修改 `config/*.local.properties` 后重启 `ce.service` | 否 |
 
-工具链通过相对软链和 9p 共享立即生效。若 `.env` 配置了 `CE_VM_SSH_KEY`，更新脚本会 best-effort 重启 CE 以清理缓存；未配置时可手动执行：
+工具链通过相对软链和 9p 共享给 VM，但 CE 进程需要重启才能重新扫描编译器列表。若 `.env` 配置了 `CE_VM_SSH_KEY`，更新脚本会 best-effort 重启 CE；未配置时可重启 QEMU 容器，或手动执行：
 
 ```bash
 ssh -i <private-key> -p 2223 ce@127.0.0.1 \
