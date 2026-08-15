@@ -17,11 +17,11 @@ CE_REF="${CE_REF:-gh-18904}"
 FORCE_REPROVISION="${FORCE_REPROVISION:-0}"
 NODE_VERSION="${NODE_VERSION:-}"
 NODE_SHA256="${NODE_SHA256:-}"
-COMPILERS_SRC="${COMPILERS_SRC:?需指定工具链目录(容器内路径)}"
-REPO_SRC="${REPO_SRC:?需指定仓库目录(容器内路径)}"
+COMPILERS_SRC=/share/compilers
+REPO_SRC=/share/repo
 FWD_PORT="${FWD_PORT:-10240}"
 SSH_FWD_PORT="${SSH_FWD_PORT:-2223}"
-SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-/vm/ssh/ce_vm_key.pub}"
+SSH_PUBKEY_FILE=/share/sshpub/ce_vm_key.pub
 CLOUD_INIT_SRC="${REPO_SRC}/vm/cloud-init"
 
 DISK_DIR=/vm/disk

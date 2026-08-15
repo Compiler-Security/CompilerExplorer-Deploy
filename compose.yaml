@@ -23,11 +23,7 @@ services:
       CE_REF: "${CE_REF:-gh-18904}"
       NODE_VERSION: "${NODE_VERSION:-}"
       NODE_SHA256: "${NODE_SHA256:-}"
-      FWD_PORT: "10240"
       SSH_FWD_PORT: "${CE_VM_SSH_PORT:-2223}"
-      COMPILERS_SRC: /share/compilers
-      REPO_SRC: /share/repo
-      SSH_PUBKEY_FILE: /share/sshpub/ce_vm_key.pub
 
     volumes:
       - vm-disk:/vm/disk
