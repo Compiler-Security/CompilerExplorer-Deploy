@@ -127,8 +127,8 @@ stage('deploy to CE') {
 MLIR 默认 pass 或运行库路径可在 `config/mlir.local.properties` 中设置：
 
 ```properties
-compiler.myopt.options=--mlir-print-ir-after-all
-compiler.myopt.ldPath=/opt/compiler-explorer/mlir-custom/lib
+compiler.mlir-opt.options=--mlir-print-ir-after-all
+compiler.mlir-opt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 ```
 
 Clang riscv64 找不到 C 库头文件时，按实际 GCC 包布局给 `group.clangriscv.options` 补 `--sysroot`。
@@ -150,7 +150,7 @@ Clang riscv64 找不到 C 库头文件时，按实际 GCC 包布局给 `group.cl
 - `MLIR` 不出现：它不是 Clang 包的默认附带项；先确认 `mlir-custom/bin/mlir-opt` 和 `mlir-translate` 均可执行。
 - 更新后仍显示旧结果：重启 `ce.service` 清理 CE 缓存。
 - Clang 缺少 libstdc++/启动文件：检查 `--gcc-toolchain=/opt/compiler-explorer/gcc-latest`。
-- MLIR 缺运行库：设置 `compiler.myopt.ldPath`。
+- MLIR 缺运行库：设置 `compiler.mlir-opt.ldPath`。
 - nsjail 启动失败：确认 `/sys/fs/cgroup/ce-compile` 和 `ce-sandbox` 存在且归 uid 10001。
 - VM 重启后编译器全部消失：确认 `compilers` 与 `cerepo` 两个 9p 挂载存在；必要时在 VM 内执行 `mount -a`。
 - 配置未生效：重启 `ce.service`；只有装配期参数才需要 `FORCE_REPROVISION`。
