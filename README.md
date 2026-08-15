@@ -120,7 +120,7 @@ stage('deploy to CE') {
 | `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
 | `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
 
-默认通过 `restrictToLanguages=c,c++,llvm,mlir,p4` 只加载 C、C++、LLVM IR、MLIR 和 P4。P4 由装配阶段应用的小型 CE 源码补丁提供 Monaco 语法高亮，不安装或替换编译器；编译仍使用部署方已有的定制工具链。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
+默认通过 `restrictToLanguages=c,c++,llvm,mlir,p4` 只加载 C、C++、LLVM IR、MLIR 和 P4。P4 由装配阶段应用的小型 CE 源码补丁提供图标与 Monaco 语法高亮，不安装或替换编译器；编译仍使用部署方已有的定制工具链。CE 为 IDE/项目模式会始终保留 CMake、Cargo、Makefile、Maven 等构建清单语言；它们不会引入额外编译器。
 
 CE 源码定制以有序 patch 队列维护，QEMU 与 Kata 构建均通过 `scripts/apply-ce-patches.sh` 按四位数字前缀幂等应用 `vm/patches/*.patch`。新增补丁使用连续序号命名（如 `0002-description.patch`）；升级 `CE_REF` 时应先对新 tag 执行补丁检查。
 
