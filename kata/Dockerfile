@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Kata 备选路径：镜像只含 CE，工具链由 Compose 只读挂载。
+# Kata 镜像：只含 CE，工具链由 Compose 只读挂载。
 
 FROM node:22-bookworm AS builder
 

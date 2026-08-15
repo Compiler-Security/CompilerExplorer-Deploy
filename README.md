@@ -17,8 +17,8 @@ cp .env.example .env
 # 修改 CE_COMPILERS_ROOT；它必须是宿主机绝对路径。
 
 scripts/update-toolchains.sh
-docker compose -f docker-compose.vm.yml up -d --build qemu
-docker compose -f docker-compose.vm.yml logs -f qemu
+docker compose up -d --build
+docker compose logs -f
 ```
 
 首次启动会下载 Ubuntu 26.04 云镜像，并在 VM 内安装 Node、nsjail 和 CE。QEMU 启动逻辑与 cloud-init 直接来自仓库只读挂载；修改这些文件不需要重新构建 QEMU 工具镜像。完成后验证：
@@ -62,13 +62,13 @@ CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 
 ```bash
 FORCE_REPROVISION="$(date +%s%N)" \
-  docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
+  docker compose up -d --force-recreate qemu
 ```
 
 同一令牌只执行一次删盘。若要连同基础镜像和 overlay 一起清理：
 
 ```bash
-docker compose -f docker-compose.vm.yml down -v
+docker compose down -v
 ```
 
 ## 工具链与语言
@@ -125,11 +125,11 @@ compiler.mlir-opt.ldPath=/opt/compiler-explorer/mlir-custom/lib
 在专用宿主机安装并注册 Kata runtime：
 
 ```bash
-sudo scripts/setup-kata.sh
-docker compose up -d --build
+sudo kata/setup.sh
+docker compose -f compose.kata.yaml up -d --build
 ```
 
-`docker-compose.yml` 固定使用 `runtime: kata`，不再启用容器内 nsjail。根文件系统只读，缓存和本地存储位于 tmpfs，容器重建后不保留。该路径更新配置或工具链后使用 `docker compose restart ce`；`scripts/update-ce.sh` 仅适用于 QEMU 主路径。
+`compose.kata.yaml` 固定使用 `runtime: kata`，不再启用容器内 nsjail。根文件系统只读，缓存和本地存储位于 tmpfs，容器重建后不保留。该路径更新配置或工具链后使用 `docker compose -f compose.kata.yaml restart ce`；`scripts/update-ce.sh` 仅适用于 QEMU 主路径。
 
 ## 安全边界
 
@@ -143,7 +143,7 @@ docker compose up -d --build
 
 - `/dev/kvm` 不存在：启用 KVM 或嵌套虚拟化。
 - `10240` 或 SSH 端口冲突：释放占用；SSH 端口可通过 `CE_VM_SSH_PORT` 修改。
-- 查看装配日志：`docker compose -f docker-compose.vm.yml logs -f qemu`。
+- 查看装配日志：`docker compose logs -f qemu`。
 - 查看 CE 服务：VM 内执行 `journalctl -u ce -e`。
 - `runChild(): Launching child process failed`：检查本次装配是否通过“验证 nsjail 编译器沙箱”；脚本会创建 CE 配置要求的空 `/cefs` 挂载点并在启动 CE 前执行真实自检。
 - 工具链在 QEMU 容器内位于 `/share/compilers`，在 guest 内位于 `/opt/compiler-explorer`；不要在 QEMU 容器里查后者。
@@ -152,5 +152,5 @@ docker compose up -d --build
 - Lean 未出现：检查 `lean-latest/bin/lean` 和 `bin/leanc`。
 - MLIR 未出现：检查 `mlir-custom/bin/mlir-opt` 和 `bin/mlir-translate`。
 - 配置未生效：重启 `ce.service`，并检查 `/opt/ce/etc/config/*.local.properties` 是否指向 `/mnt/ce-repo/config/`。新增配置文件不需要重建 VM。
-- 更新到引入“装配输入指纹”的版本：执行一次 `docker compose -f docker-compose.vm.yml up -d --build --force-recreate qemu`；旧 overlay 会自动重建，基础云镜像仍保留。
+- 更新到引入“装配输入指纹”的版本：执行一次 `docker compose up -d --build --force-recreate qemu`；旧 overlay 会自动重建，基础云镜像仍保留。
 - SELinux Enforcing 阻止读取：按 Compose 注释给只读 bind mount 添加 `z` 标签。

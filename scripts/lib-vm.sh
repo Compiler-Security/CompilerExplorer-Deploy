@@ -14,7 +14,7 @@ restart_ce_in_vm() {
     fi
   else
     echo ">> 提示: 未配置 CE_VM_SSH_KEY，跳过 VM 内 CE 重启。"
-    echo ">>   请执行 docker compose -f docker-compose.vm.yml restart qemu，"
+    echo ">>   请执行 docker compose restart qemu，"
     echo ">>   或进 VM 执行 sudo systemctl restart ce.service，以刷新编译器列表。"
   fi
 }

@@ -21,15 +21,15 @@ fi
 echo ">> .env 中 CE_REF=${NEW_REF}"
 
 echo ">> 重建 qemu 容器（entrypoint 将检测到 CE_REF 变化并重新装配 VM 内的 CE）"
-docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
+docker compose up -d --force-recreate qemu
 
 cat <<EOF
 >> 已触发。VM 正在按 ${NEW_REF} 重新装配 CE（构建需几分钟）。
 >> 跟进进度:
-     docker compose -f docker-compose.vm.yml logs -f qemu
+     docker compose logs -f qemu
 >> 装配完成后验证:
      curl http://127.0.0.1:10240/api/version
 
 >> 提示：CE_REF 没变也想强制重新装配（加 SSH 公钥 / 上次装配失败恢复）：
-     FORCE_REPROVISION="\$(date +%s%N)" docker compose -f docker-compose.vm.yml up -d --force-recreate qemu
+     FORCE_REPROVISION="\$(date +%s%N)" docker compose up -d --force-recreate qemu
 EOF

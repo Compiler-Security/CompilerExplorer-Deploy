@@ -1,11 +1,12 @@
 name: ce
 
-# Kata 备选路径；QEMU 主路径见 docker-compose.vm.yml。
+# Kata 备选路径；默认 QEMU 路径见 compose.yaml。
 
 services:
   ce:
     build:
       context: .
+      dockerfile: kata/Dockerfile
       args:
         CE_REF: "${CE_REF:-gh-18904}"
     image: ssct/compiler-explorer:local

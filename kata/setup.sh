@@ -183,7 +183,7 @@ docker run --rm --runtime kata hello-world 2>&1 | grep -i hello \
 
 cat <<'EOF'
 >> 完成。之后 CE 容器用 runtime:kata 即跑在轻量 VM 里：
-     docker compose up -d ce
+     docker compose -f compose.kata.yaml up -d ce
    确认它确实进了 VM：
      docker exec ce-app uname -r        # 内核版本应是 Kata guest 内核，≠ 宿主机
 EOF

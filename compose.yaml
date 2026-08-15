@@ -1,6 +1,6 @@
 name: ce-vm
 
-# 主路径：Docker 只运行 QEMU/KVM，CE 在 VM 内由 systemd + nsjail 运行。
+# 默认路径：Docker 只运行 QEMU/KVM，CE 在 VM 内由 systemd + nsjail 运行。
 
 services:
   qemu:
