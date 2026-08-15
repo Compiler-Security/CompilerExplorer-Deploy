@@ -220,12 +220,28 @@ finish_toolchain_update() { # finish_toolchain_update <display-name>
       fi
       echo ">> CE 重启已交给统一工具链更新入口处理"
     else
-      # shellcheck source=../lib-vm.sh
-      source "${REPO_ROOT}/scripts/lib-vm.sh"
       restart_ce_in_vm
     fi
   else
     echo ">> ${display_name} 已是最新，无需重启 CE"
   fi
   echo ">> ${display_name} 更新完成"
+}
+
+restart_ce_in_vm() {
+  local key="${CE_VM_SSH_KEY:-}"
+  if [[ -z "${key}" || ! -f "${key}" ]]; then
+    echo ">> 未配置 CE_VM_SSH_KEY；请执行 docker compose restart qemu 以刷新编译器列表。"
+    return
+  fi
+
+  echo ">> SSH 进 VM 重启 CE（清缓存）"
+  if ssh -i "${key}" -p "${CE_VM_SSH_PORT:-2223}" \
+         -o BatchMode=yes -o ConnectTimeout=8 -o IdentitiesOnly=yes -o LogLevel=ERROR \
+         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+         ce@127.0.0.1 'sudo systemctl restart ce.service'; then
+    echo ">> CE 已在 VM 内重启"
+  else
+    echo ">> 警告: SSH 重启 CE 失败；请执行 docker compose restart qemu。" >&2
+  fi
 }

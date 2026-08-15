@@ -34,8 +34,8 @@ echo ">> 更新 Lean 4（${LEAN_VERSION}）"
 
 unset CE_DEFER_RESTART
 unset CE_RESTART_NEEDED_FILE
-# shellcheck source=lib-vm.sh
-source "${REPO_ROOT}/scripts/lib-vm.sh"
+# shellcheck source=toolchains/lib.sh
+source "${REPO_ROOT}/scripts/toolchains/lib.sh"
 if [[ -f "${RESTART_NEEDED_FILE}" ]]; then
   restart_ce_in_vm
 else
