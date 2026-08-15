@@ -46,6 +46,8 @@ curl http://127.0.0.1:10240/api/compilers
 
 Lean 4 更新器使用官方 `linux.tar.zst`（当前完整工具链约 575 MB），部署宿主机需安装 `python3` 与 `zstd`。
 
+Alive2 目前只预配置为 LLVM IR 的单文件工具，仓库不安装或更新它。`/opt/compiler-explorer/alive2-latest/bin/alive-tv` 不存在时，CE 会隐藏 Alive2，并在启动日志中记录预期的 `Unable to stat tools.alive2 tool binary` warning；以后将可执行文件部署到该路径并重启 CE，工具会自动出现。
+
 ### 更新
 
 | 内容 | 命令 | 是否重建 VM |
@@ -123,7 +125,7 @@ stage('deploy to CE') {
 | `config/c.local.properties` | C 的 Clang/GCC 与 riscv64 交叉编译 |
 | `config/c++.local.properties` | C++ 的 Clang/GCC、交叉编译与在线运行开关 |
 | `config/lean.local.properties` | Lean 4 及同工具链内的 `leanc` |
-| `config/llvm.local.properties` | LLVM IR 的 clang、`llc` 与 `opt` |
+| `config/llvm.local.properties` | LLVM IR 的 clang、`llc`、`opt` 与 Alive2 预配置 |
 | `config/mlir.local.properties` | 自研 `mlir-opt` / `mlir-translate` |
 | `config/compiler-explorer.local.properties` | 超时、并发、输出上限和危险参数限制 |
 | `config/execution.local.properties` | QEMU 路径的 nsjail 配置 |
@@ -157,6 +159,7 @@ Clang riscv64 找不到 C 库头文件时，按实际 GCC 包布局给 `group.cl
 - CE 未启动：查看 `docker compose -f docker-compose.vm.yml logs -f qemu`；VM 内可查 `journalctl -u ce -e`。
 - 编译器未出现在列表：确认 `CE_COMPILERS_ROOT/*-latest` 指向存在的同目录相对路径，并在更新工具链后重启 `ce.service` 刷新列表。
 - `LLVM IR` 不出现：确认 `clang-latest/bin/clang++` 可执行；旧 VM 还需存在 `/opt/ce/etc/config/llvm.local.properties` 软链。
+- `Alive2` 不出现：这是未安装 `alive2-latest/bin/alive-tv` 时的预期行为；部署该可执行文件后重启 `ce.service`。
 - `MLIR` 不出现：它不是 Clang 包的默认附带项；先确认 `mlir-custom/bin/mlir-opt` 和 `mlir-translate` 均可执行。
 - 更新后仍显示旧结果：重启 `ce.service` 清理 CE 缓存。
 - Clang 缺少 libstdc++/启动文件：检查 `--gcc-toolchain=/opt/compiler-explorer/gcc-latest`。
