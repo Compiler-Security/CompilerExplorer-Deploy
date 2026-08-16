@@ -7,7 +7,7 @@ services:
     build: ./vm
     image: ssct/ce-qemu:local
     container_name: ce-vm
-    restart: unless-stopped
+    restart: always
 
     devices:
       - /dev/kvm:/dev/kvm
