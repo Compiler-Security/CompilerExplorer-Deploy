@@ -1,11 +1,11 @@
 # Jenkins 自动发布工具链
 
-Jenkins 构建机与 CE 部署机分离时，自研工具链（如 MLIR）通过 rsync/SSH 发布，私钥只保存在 Jenkins Credentials。
+Jenkins 构建机与 CE 部署机分离时，自研 P4 工具链通过 rsync/SSH 发布，私钥只保存在 Jenkins Credentials。
 
 ```text
 Jenkins（私钥）
   │  rsync/ssh → ce-deploy@部署机（公钥）
-  │    └─ scripts/toolchains/deploy-mlir.sh → CE_COMPILERS_ROOT
+  │    └─ scripts/toolchains/deploy-p4.sh → CE_COMPILERS_ROOT
   │         └─ 9p 只读挂载 → VM /opt/compiler-explorer
   └─  ssh -J ce-deploy@部署机 → ce@127.0.0.1:2223（同一公钥）
         └─ sudo systemctl restart ce.service
@@ -58,10 +58,10 @@ sudo setfacl -m u:ce-deploy:--x /home/<user>/<每一级父目录>
 ### 3. 脚本只读权限
 
 ```bash
-sudo -u ce-deploy test -x "${DEPLOY_REPO}/scripts/toolchains/deploy-mlir.sh" || {
+sudo -u ce-deploy test -x "${DEPLOY_REPO}/scripts/toolchains/deploy-p4.sh" || {
   sudo setfacl -m u:ce-deploy:r-x "${DEPLOY_REPO}/scripts"
   sudo setfacl -m u:ce-deploy:r-x "${DEPLOY_REPO}/scripts/toolchains"
-  sudo setfacl -m u:ce-deploy:r-x "${DEPLOY_REPO}/scripts/toolchains/deploy-mlir.sh"
+  sudo setfacl -m u:ce-deploy:r-x "${DEPLOY_REPO}/scripts/toolchains/deploy-p4.sh"
   sudo setfacl -m u:ce-deploy:r-- "${DEPLOY_REPO}/scripts/toolchains/lib.sh"
 }
 ```
@@ -159,9 +159,21 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    test -x "${INSTALL_DIR}/bin/mlir-opt"
-                    test -x "${INSTALL_DIR}/bin/mlir-translate"
+                    test -x "${INSTALL_DIR}/bin/p4c"
+                    test -x "${INSTALL_DIR}/bin/p4mlir-opt"
                     chmod -R a+rX "${INSTALL_DIR}"   # VM 内以只读挂载执行
+                '''
+            }
+        }
+
+        stage('Package') {
+            steps {
+                sh '''
+                    set -eu
+                    SHORT_COMMIT="$(git rev-parse --short=12 HEAD)"
+                    PKG="p4mlir-${BUILD_NUMBER}-${SHORT_COMMIT}.tar.gz"
+                    echo "${PKG}" > "${WORKSPACE}/.toolchain-pkg"
+                    tar -czf "${WORKSPACE}/${PKG}" -C "${INSTALL_DIR}" .
                 '''
             }
         }
@@ -171,16 +183,10 @@ pipeline {
                 sshagent(credentials: ['ce-deploy-host']) {
                     sh '''
                         set -eu
-                        SHORT_COMMIT="$(git rev-parse --short=12 HEAD)"
-                        echo "${BUILD_NUMBER}-${SHORT_COMMIT}" > "${WORKSPACE}/.toolchain-build-id"
-                        STAGING_DIR="${INCOMING_ROOT}/$(cat "${WORKSPACE}/.toolchain-build-id")"
-
-                        ssh ${SSH_OPTS} "${DEPLOY_HOST}" \
-                            "install -d -m 0750 '${STAGING_DIR}'"
-
-                        rsync -aH --no-owner --no-group --delete --partial \
-                            -e "ssh ${SSH_OPTS}" \
-                            "${INSTALL_DIR}/" "${DEPLOY_HOST}:${STAGING_DIR}/"
+                        PKG="$(cat "${WORKSPACE}/.toolchain-pkg")"
+                        rsync -a --partial -e "ssh ${SSH_OPTS}" \
+                            "${WORKSPACE}/${PKG}" \
+                            "${DEPLOY_HOST}:${INCOMING_ROOT}/${PKG}"
                     '''
                 }
             }
@@ -191,11 +197,11 @@ pipeline {
                 sshagent(credentials: ['ce-deploy-host']) {
                     sh '''
                         set -eu
-                        BUILD_ID="$(cat "${WORKSPACE}/.toolchain-build-id")"
+                        PKG="$(cat "${WORKSPACE}/.toolchain-pkg")"
                         ssh ${SSH_OPTS} "${DEPLOY_HOST}" \
                             "CE_COMPILERS_ROOT='${TOOLCHAIN_ROOT}' CE_DEFER_RESTART=1 \
-                             '${DEPLOY_REPO}/scripts/toolchains/deploy-mlir.sh' \
-                             '${INCOMING_ROOT}/${BUILD_ID}' '${BUILD_ID}'"
+                             '${DEPLOY_REPO}/scripts/toolchains/deploy-p4.sh' \
+                             '${INCOMING_ROOT}/${PKG}'"
                     '''
                 }
             }
@@ -222,7 +228,7 @@ pipeline {
                         set -eu
                         ssh ${SSH_OPTS} -J "${DEPLOY_HOST}" -p "${VM_SSH_PORT}" \
                             ce@127.0.0.1 \
-                            '/opt/compiler-explorer/mlir-custom/bin/mlir-opt --version | head -1'
+                            '/opt/compiler-explorer/p4-latest/bin/p4c --version | head -1'
                     '''
                 }
             }
@@ -233,10 +239,10 @@ pipeline {
         always {
             sshagent(credentials: ['ce-deploy-host']) {
                 sh '''
-                    if [ -f "${WORKSPACE}/.toolchain-build-id" ]; then
-                        BUILD_ID="$(cat "${WORKSPACE}/.toolchain-build-id")"
+                    if [ -f "${WORKSPACE}/.toolchain-pkg" ]; then
+                        PKG="$(cat "${WORKSPACE}/.toolchain-pkg")"
                         ssh ${SSH_OPTS} "${DEPLOY_HOST}" \
-                            "rm -rf -- '${INCOMING_ROOT}/${BUILD_ID}'" || true
+                            "rm -f -- '${INCOMING_ROOT}/${PKG}'" || true
                     fi
                 '''
             }
@@ -249,9 +255,9 @@ pipeline {
 要点：
 
 - `CE_DEFER_RESTART=1` 让发布脚本只切换软链，由 `Restart CE` 阶段统一重启 VM 内的 `ce.service`。
-- `post.always` 清理部署机上的临时上传目录；`deploy-mlir.sh` 已把内容复制进 `compilers`，删除 staging 不影响已发布版本。
+- `post.always` 清理部署机上的临时 tarball；`deploy-p4.sh` 已把内容解压进 `compilers`，删除 tarball 不影响已发布版本。
 - `StrictHostKeyChecking=accept-new` 适合首次接入，稳定后建议在 agent 上预置 `known_hosts` 并固定指纹。
-- 发布其他工具链时复制相应 `deploy-*.sh` 的模式；`deploy-mlir.sh` 要求产物含 `bin/mlir-opt` 与 `bin/mlir-translate`。
+- 发布其他工具链时复制相应 `deploy-*.sh` 的模式；`deploy-p4.sh` 接收 `p4mlir-<short_hash>.tar.gz`，要求归档含 `bin/p4c`、`bin/p4mlir-opt`、`bin/p4mlir-translate`、`bin/p4mlir-to-json`、`bin/mlir-translate` 及 `bin/clang`/`bin/clang++`/`bin/opt`/`bin/llc`/`bin/llvm-objdump`/`bin/llvm-cxxfilt`。
 
 ## 验证
 

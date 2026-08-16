@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 统一更新标准工具链；自研 MLIR 仍由 scripts/toolchains/deploy-mlir.sh 发布。
+# 统一更新标准工具链；自研 P4 工具链由 scripts/toolchains/deploy-p4.sh 发布。
 # 用法：update-toolchains.sh [Lean版本号|latest]
 set -euo pipefail
 
