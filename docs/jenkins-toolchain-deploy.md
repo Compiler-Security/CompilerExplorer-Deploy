@@ -22,7 +22,7 @@ Jenkins（私钥）
 
 ## 部署机配置
 
-以下示例假设仓库位于 `/home/llm/CompilerExplorer-Deploy`，按实际路径替换。
+以下示例假设仓库位于 `/srv/ce/repo`，按实际路径替换。
 
 ### 1. 创建最小用户
 
@@ -36,17 +36,11 @@ id ce-deploy   # 应只有 ce-deploy 自己的组，无 sudo/docker/kvm
 ### 2. 目录与权限
 
 ```bash
-DEPLOY_REPO=/home/llm/CompilerExplorer-Deploy
-TOOLCHAIN_ROOT="${DEPLOY_REPO}/data/ce/compilers"
-INCOMING_ROOT="${DEPLOY_REPO}/data/ce/incoming"
+DEPLOY_REPO=/srv/ce/repo
+TOOLCHAIN_ROOT=/srv/ce/compilers
+INCOMING_ROOT=/srv/ce/incoming
 
 sudo install -d -o ce-deploy -g ce-deploy -m 0750 "${INCOMING_ROOT}"
-
-# 父目录只给 x（可穿过、不可列出）
-sudo setfacl -m u:ce-deploy:--x /home/llm
-sudo setfacl -m u:ce-deploy:--x "${DEPLOY_REPO}"
-sudo setfacl -m u:ce-deploy:--x "${DEPLOY_REPO}/data"
-sudo setfacl -m u:ce-deploy:--x "${DEPLOY_REPO}/data/ce"
 
 # 工具链根：发布与清理旧版本需要组写
 sudo chgrp -R ce-deploy "${TOOLCHAIN_ROOT}"
@@ -54,7 +48,12 @@ sudo chmod -R g+rwX "${TOOLCHAIN_ROOT}"
 sudo find "${TOOLCHAIN_ROOT}" -type d -exec chmod g+s {} +
 ```
 
-目录位于其他用户家目录下时同样适用：父目录一律 `--x`，目标目录按上表授权，不要把 `ce-deploy` 加入家目录属主的组。用 `namei -l <路径>` 检查整条路径权限。
+目录位于其他用户家目录下时（如 `/home/<user>/...`）：对路径上每一级父目录只授 `x`（可穿过、不可列出），目标目录按上表授权，不要把 `ce-deploy` 加入家目录属主的组。用 `namei -l <路径>` 检查整条路径权限。
+
+```bash
+sudo setfacl -m u:ce-deploy:--x /home/<user>
+sudo setfacl -m u:ce-deploy:--x /home/<user>/<每一级父目录>
+```
 
 ### 3. 脚本只读权限
 
@@ -92,17 +91,17 @@ sudo chmod 0600 /var/lib/ce-deploy/.ssh/authorized_keys
 
 ```bash
 install -D -m 0644 jenkins_ce_deploy.pub \
-  "${DEPLOY_REPO}/data/ce/keys/jenkins_ce_deploy.pub"
+  /srv/ce/keys/jenkins_ce_deploy.pub
 ```
 
 ```dotenv
-CE_VM_SSH_PUBKEY=/home/llm/CompilerExplorer-Deploy/data/ce/keys/jenkins_ce_deploy.pub
+CE_VM_SSH_PUBKEY=/srv/ce/keys/jenkins_ce_deploy.pub
 ```
 
 以后重建 overlay 时 cloud-init 会自动注入。当前运行的 VM 用旧管理密钥手动追加一次：
 
 ```bash
-cat data/ce/keys/jenkins_ce_deploy.pub |
+cat /srv/ce/keys/jenkins_ce_deploy.pub |
 ssh -i "${CE_VM_SSH_KEY}" -p "${CE_VM_SSH_PORT:-2223}" -o IdentitiesOnly=yes \
   ce@127.0.0.1 '
     set -eu; umask 077
@@ -137,9 +136,9 @@ pipeline {
 
     environment {
         DEPLOY_HOST    = 'ce-deploy@poweredger770'
-        DEPLOY_REPO    = '/home/llm/CompilerExplorer-Deploy'
-        TOOLCHAIN_ROOT = '/home/llm/CompilerExplorer-Deploy/data/ce/compilers'
-        INCOMING_ROOT  = '/home/llm/CompilerExplorer-Deploy/data/ce/incoming'
+        DEPLOY_REPO    = '/srv/ce/repo'
+        TOOLCHAIN_ROOT = '/srv/ce/compilers'
+        INCOMING_ROOT  = '/srv/ce/incoming'
         VM_SSH_PORT    = '2223'
         SSH_OPTS       = '-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
         INSTALL_DIR    = "${WORKSPACE}/install"
@@ -259,10 +258,10 @@ pipeline {
 ```bash
 # 登录与写权限
 ssh -i jenkins_ce_deploy ce-deploy@poweredger770 \
-  'id && test -w /home/llm/CompilerExplorer-Deploy/data/ce/incoming'
+  'id && test -w /srv/ce/incoming'
 
 # 不能列出他人家目录（应 Permission denied）
-ssh -i jenkins_ce_deploy ce-deploy@poweredger770 'ls /home/llm'
+ssh -i jenkins_ce_deploy ce-deploy@poweredger770 'ls /home/<user>'
 
 # ProxyJump 进 VM 并操作 CE
 ssh -i jenkins_ce_deploy -J ce-deploy@poweredger770 -p 2223 \
@@ -274,7 +273,7 @@ ssh -i jenkins_ce_deploy -J ce-deploy@poweredger770 -p 2223 \
 | 主体 | 能做什么 | 不能做什么 |
 |---|---|---|
 | Jenkins 私钥 | 仅存于 Jenkins Credentials | 不在任何服务器磁盘上 |
-| `ce-deploy` | 写 `incoming`/`compilers`、执行部署脚本、转发到 `127.0.0.1:2223` | 无 sudo/docker/kvm、不能读取 `/home/llm`、不能写仓库、不能转发到其他地址 |
+| `ce-deploy` | 写 `incoming`/`compilers`、执行部署脚本、转发到 `127.0.0.1:2223` | 无 sudo/docker/kvm、不能读取他人家目录、不能写仓库、不能转发到其他地址 |
 | VM 内 `ce` | 免密 `restart/status/is-active ce.service` | 无其他 root 权限 |
 
 整个发布只更新工具链目录并重启 `ce.service`，不重建 Docker 镜像、Ubuntu 基础镜像或 CE overlay。
