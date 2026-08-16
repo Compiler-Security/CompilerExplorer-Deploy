@@ -131,6 +131,8 @@ ssh -i "$CE_VM_SSH_KEY" -p "${CE_VM_SSH_PORT:-2223}" \
 
 工具链使用版本目录和相对 `*-latest` 软链。更新器会从真实二进制读取版本并同步 CE 配置，因此版本升级产生配置 Git diff 是预期行为。统一入口在全部更新后只重启一次 CE。
 
+Jenkins 与部署机分离时，自研工具链的 CI 自动发布流程（最小权限用户、密钥模型、Jenkinsfile）见 [docs/jenkins-toolchain-deploy.md](docs/jenkins-toolchain-deploy.md)。
+
 若 `.env` 配置了管理密钥，更新器会通过 SSH 重启 CE：
 
 ```bash
