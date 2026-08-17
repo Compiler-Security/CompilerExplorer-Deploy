@@ -1,0 +1,892 @@
+diff --git a/lib/base-compiler.ts b/lib/base-compiler.ts
+index 0cdf054..a954c05 100644
+--- a/lib/base-compiler.ts
++++ b/lib/base-compiler.ts
+@@ -143,7 +143,7 @@ import {
+     replaceSysrootArg,
+     replaceToolchainArg,
+ } from './toolchain-utils.js';
+-import type {ITool} from './tooling/base-tool.interface.js';
++import {type ChainedToolResult, type ITool, isChainedTool} from './tooling/base-tool.interface.js';
+ import * as utils from './utils.js';
+ 
+ const compilationTimeHistogram = new PromClient.Histogram({
+@@ -2086,6 +2086,156 @@ export class BaseCompiler {
+         return tooling;
+     }
+ 
++    async runPostCompilationTools(tools: ActiveTool[], compilationInfo: CompilationInfo): Promise<ToolResult[]> {
++        const selectedTools = tools
++            .map(active => ({
++                active,
++                implementation: this.possibleTools.find(
++                    possible => possible.id === active.id && possible.type === 'postcompilation',
++                ),
++            }))
++            .filter(selected => selected.implementation !== undefined) as Array<{
++            active: ActiveTool;
++            implementation: ITool;
++        }>;
++
++        const activeById = new Map<string, ActiveTool>();
++        const implementationById = new Map<string, ITool>();
++        const validationErrors = new Map<string, string>();
++        const childToolIds = new Set(
++            this.possibleTools
++                .filter(possible => possible.type === 'postcompilation')
++                .flatMap(possible => possible.tool.nextTools || []),
++        );
++
++        for (const selected of selectedTools) {
++            if (activeById.has(selected.active.id)) {
++                validationErrors.set(selected.active.id, 'Duplicate chained tool id');
++            }
++            activeById.set(selected.active.id, selected.active);
++            implementationById.set(selected.active.id, selected.implementation);
++        }
++
++        const validated = new Set<string>();
++        const validate = (toolId: string, visiting: Set<string>): void => {
++            if (validated.has(toolId) || validationErrors.has(toolId)) return;
++            if (visiting.has(toolId)) {
++                validationErrors.set(toolId, 'Chained tool dependency cycle');
++                return;
++            }
++
++            const active = activeById.get(toolId);
++            const implementation = implementationById.get(toolId);
++            if (!active || !implementation) return;
++            if (!active.parentToolId) {
++                if (childToolIds.has(toolId)) {
++                    validationErrors.set(toolId, 'Chained child tool requires an active parent');
++                    return;
++                }
++                validated.add(toolId);
++                return;
++            }
++            if (!isChainedTool(implementation)) {
++                validationErrors.set(toolId, 'Tool does not support chained input');
++                return;
++            }
++
++            const parentActive = activeById.get(active.parentToolId);
++            const parentImplementation = implementationById.get(active.parentToolId);
++            if (!parentActive || !parentImplementation) {
++                validationErrors.set(toolId, 'Parent tool is not active');
++                return;
++            }
++            if (!isChainedTool(parentImplementation)) {
++                validationErrors.set(toolId, 'Parent tool does not produce chained output');
++                return;
++            }
++            if (!parentImplementation.tool.nextTools?.includes(toolId)) {
++                validationErrors.set(toolId, 'Tool is not an allowed child of its parent');
++                return;
++            }
++
++            const nextVisiting = new Set(visiting);
++            nextVisiting.add(toolId);
++            validate(active.parentToolId, nextVisiting);
++            if (validationErrors.has(active.parentToolId)) {
++                validationErrors.set(toolId, 'Parent tool chain is invalid');
++                return;
++            }
++            validated.add(toolId);
++        };
++
++        for (const selected of selectedTools) validate(selected.active.id, new Set());
++
++        const blankResult = (tool: ITool): ChainedToolResult => ({
++            result: {
++                id: tool.id,
++                name: tool.tool.name,
++                code: 1,
++                languageId: tool.tool.languageId,
++                stdout: [],
++                stderr: [],
++            },
++        });
++        const errorResult = (tool: ITool, message: string): ChainedToolResult => ({
++            result: {
++                id: tool.id,
++                name: tool.tool.name,
++                code: 1,
++                languageId: 'stderr',
++                stdout: [],
++                stderr: [{text: message}],
++            },
++        });
++
++        const pending = new Map<string, Promise<ChainedToolResult>>();
++        const run = (toolId: string): Promise<ChainedToolResult> => {
++            const existing = pending.get(toolId);
++            if (existing) return existing;
++
++            const active = activeById.get(toolId)!;
++            const implementation = implementationById.get(toolId)!;
++            const promise = (async () => {
++                const validationError = validationErrors.get(toolId);
++                if (validationError) return errorResult(implementation, validationError);
++
++                if (!isChainedTool(implementation)) {
++                    return {
++                        result: await implementation.runTool(
++                            compilationInfo,
++                            compilationInfo.inputFilename,
++                            active.args,
++                            active.stdin,
++                            this.supportedLibraries,
++                            false,
++                        ),
++                    };
++                }
++
++                let inputFilename = compilationInfo.outputFilename;
++                if (active.parentToolId) {
++                    const parent = await run(active.parentToolId);
++                    if (parent.result.code !== 0 || !parent.outputFilename) return blankResult(implementation);
++                    inputFilename = parent.outputFilename;
++                } else if (compilationInfo.code !== 0) {
++                    return blankResult(implementation);
++                }
++
++                return implementation.runChainedTool(
++                    compilationInfo,
++                    inputFilename,
++                    active.args,
++                    active.stdin,
++                    this.supportedLibraries,
++                );
++            })();
++            pending.set(toolId, promise);
++            return promise;
++        };
++
++        return Promise.all(selectedTools.map(async selected => (await run(selected.active.id)).result));
++    }
++
+     buildExecutable(compiler: string, options: string[], inputFilename: string, execOptions: ExecutionOptionsWithEnv) {
+         // default implementation, but should be overridden by compilers
+         return this.runCompiler(compiler, options, inputFilename, execOptions, {execute: true, binary: true});
+@@ -3572,10 +3722,7 @@ export class BaseCompiler {
+ 
+         const compilationInfo = this.getCompilationInfo(key, result, customBuildPath);
+ 
+-        result.tools = _.union(
+-            result.tools || [],
+-            await Promise.all(this.runToolsOfType(tools, 'postcompilation', compilationInfo)),
+-        );
++        result.tools = _.union(result.tools || [], await this.runPostCompilationTools(tools, compilationInfo));
+ 
+         result = await this.extractDeviceCode(result, filters, compilationInfo);
+ 
+diff --git a/lib/handlers/api.ts b/lib/handlers/api.ts
+index c8849b1..e464cd1 100644
+--- a/lib/handlers/api.ts
++++ b/lib/handlers/api.ts
+@@ -329,6 +329,7 @@ export class ApiHandler {
+                 icon: tool.tool.icon,
+                 darkIcon: tool.tool.darkIcon,
+                 stdinHint: tool.tool.stdinHint,
++                nextTools: tool.tool.nextTools || [],
+             };
+         });
+     }
+diff --git a/lib/options-handler.ts b/lib/options-handler.ts
+index f5032f4..780aa33 100755
+--- a/lib/options-handler.ts
++++ b/lib/options-handler.ts
+@@ -265,6 +265,9 @@ export class ClientOptionsHandler implements ClientOptionsSource {
+                                 monacoStdin: this.compilerProps<boolean>(lang, toolBaseName + '.monacoStdin'),
+                                 icon: this.compilerProps<string>(lang, toolBaseName + '.icon'),
+                                 darkIcon: this.compilerProps<string>(lang, toolBaseName + '.darkIcon'),
++                                nextTools: splitIntoArray(
++                                    this.compilerProps<string>(lang, toolBaseName + '.nextTools'),
++                                ),
+                                 compilerLanguage: lang as LanguageKey,
+                             },
+                             {
+diff --git a/lib/tooling/base-tool.interface.ts b/lib/tooling/base-tool.interface.ts
+index f51912d..c94fa19 100755
+--- a/lib/tooling/base-tool.interface.ts
++++ b/lib/tooling/base-tool.interface.ts
+@@ -32,6 +32,11 @@ export type ToolEnv = {
+     compilerProps: PropertyGetter;
+ };
+ 
++export type ChainedToolResult = {
++    result: ToolResult;
++    outputFilename?: string;
++};
++
+ export interface ITool extends Tool {
+     runTool(
+         compilationInfo: CompilationInfo,
+@@ -42,3 +47,17 @@ export interface ITool extends Tool {
+         dontAppendInputFilepath?: boolean,
+     ): Promise<ToolResult>;
+ }
++
++export interface IChainedTool extends ITool {
++    runChainedTool(
++        compilationInfo: CompilationInfo,
++        inputFilepath: string,
++        args?: string[],
++        stdin?: string,
++        supportedLibraries?: Record<string, OptionsHandlerLibrary>,
++    ): Promise<ChainedToolResult>;
++}
++
++export function isChainedTool(tool: ITool): tool is IChainedTool {
++    return 'runChainedTool' in tool && typeof tool.runChainedTool === 'function';
++}
+diff --git a/static/components.interfaces.ts b/static/components.interfaces.ts
+index cf3b0b0..590674a 100644
+--- a/static/components.interfaces.ts
++++ b/static/components.interfaces.ts
+@@ -139,6 +139,7 @@ export type OutputState = StateWithTree & {
+ 
+ export type ToolState = {
+     toolId: string;
++    parentToolId?: string;
+     monacoStdin?: boolean;
+     monacoEditorOpen?: boolean;
+     monacoEditorHasBeenAutoOpened?: boolean;
+@@ -157,6 +158,7 @@ export type ToolViewState = StateWithTree &
+         compilerName: string; // Compiler Name (TODO(#4703): Why is this not part of StateWithTree)
+         editorid: number; // EditorId
+         toolId: string;
++        parentToolId?: string;
+     };
+ 
+ export type EmptyToolInputViewState = EmptyState;
+diff --git a/static/components.ts b/static/components.ts
+index 618e7c5..edb9e74 100644
+--- a/static/components.ts
++++ b/static/components.ts
+@@ -262,6 +262,7 @@ export function getToolViewWith(
+     args: string,
+     monacoStdin: boolean,
+     tree: number,
++    parentToolId?: string,
+ ): ComponentConfig<typeof TOOL_COMPONENT_NAME> {
+     return {
+         type: 'component',
+@@ -274,6 +275,7 @@ export function getToolViewWith(
+             args,
+             tree,
+             monacoStdin,
++            parentToolId,
+         },
+     };
+ }
+diff --git a/static/panes/compiler.ts b/static/panes/compiler.ts
+index 930020a..992b2cb 100644
+--- a/static/panes/compiler.ts
++++ b/static/panes/compiler.ts
+@@ -57,7 +57,7 @@ import * as monacoConfig from '../monaco-config.js';
+ import {LanguageLibs} from '../options.interfaces.js';
+ import {options} from '../options.js';
+ import {languagesService} from '../services/languages.service.js';
+-import {toolsService} from '../services/tools.service.js';
++import {getRootToolIds, toolsService} from '../services/tools.service.js';
+ import {SiteSettings} from '../settings.js';
+ import * as utils from '../utils.js';
+ import {Alert} from '../widgets/alert.js';
+@@ -1316,6 +1316,7 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
+                     id: content.componentState.toolId,
+                     args: splitArguments(content.componentState.args),
+                     stdin: content.componentState.stdin,
++                    parentToolId: content.componentState.parentToolId,
+                 });
+             }
+         } else if (content.content) {
+@@ -1336,6 +1337,7 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
+                 id: newToolSettings.toolId,
+                 args: splitArguments(newToolSettings.args),
+                 stdin: newToolSettings.stdin ?? '',
++                parentToolId: newToolSettings.parentToolId,
+             });
+         }
+ 
+@@ -2767,11 +2769,12 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
+         };
+ 
+         const compilerToolIds = this.compiler.tools as unknown as string[];
+-        if (compilerToolIds.length === 0) {
++        const langTools = toolsService.getCachedToolsForLang(this.currentLangId ?? '');
++        const rootToolIds = getRootToolIds(compilerToolIds, langTools || {});
++        if (rootToolIds.length === 0) {
+             addTool('none', 'No tools available');
+         } else {
+-            const langTools = toolsService.getCachedToolsForLang(this.currentLangId ?? '');
+-            compilerToolIds.forEach(toolId => {
++            rootToolIds.forEach(toolId => {
+                 const meta = langTools?.[toolId];
+                 if (this.isSupportedTool(meta?.type)) {
+                     addTool(toolId, meta?.name || toolId, meta?.icon, meta?.darkIcon);
+diff --git a/static/panes/tool.ts b/static/panes/tool.ts
+index ab1dbbd..2c48c0c 100644
+--- a/static/panes/tool.ts
++++ b/static/panes/tool.ts
+@@ -33,13 +33,16 @@ import {CompilationResult} from '../../types/compilation/compilation.interfaces.
+ import {CompilerInfo} from '../../types/compiler.interfaces.js';
+ import {LanguageKey} from '../../types/languages.interfaces.js';
+ import * as AnsiToHtml from '../ansi-to-html.js';
++import * as BootstrapUtils from '../bootstrap-utils.js';
+ import {CompilerService} from '../compiler-service.js';
+ import {ComponentConfig, NewToolSettings, TOOL_INPUT_VIEW_COMPONENT_NAME, ToolState} from '../components.interfaces.js';
+ import * as Components from '../components.js';
++import {createDragSource} from '../components.js';
+ import {Hub} from '../hub.js';
+ import * as monacoConfig from '../monaco-config.js';
+ import {toolsService} from '../services/tools.service.js';
+ import * as utils from '../utils.js';
++import {getStaticImage} from '../utils.js';
+ import {Toggles} from '../widgets/toggles.js';
+ import {MonacoPaneState} from './pane.interfaces.js';
+ import {MonacoPane} from './pane.js';
+@@ -55,6 +58,7 @@ function makeAnsiToHtml(color?: string) {
+ 
+ export class Tool extends MonacoPane<monaco.editor.IStandaloneCodeEditor, ToolState> {
+     toolId: any;
++    parentToolId?: string;
+     toolName = 'Tool';
+     compilerService: CompilerService;
+     // todo: re-evaluate all these
+@@ -80,6 +84,9 @@ export class Tool extends MonacoPane<monaco.editor.IStandaloneCodeEditor, ToolSt
+     toggleStdin: JQuery;
+     artifactBtn: JQuery;
+     artifactText: JQuery;
++    nextToolsGroup: JQuery;
++    nextToolsMenu: JQuery;
++    currentLanguageId?: LanguageKey;
+ 
+     options: Toggles;
+ 
+@@ -91,6 +98,7 @@ export class Tool extends MonacoPane<monaco.editor.IStandaloneCodeEditor, ToolSt
+         super(hub, container, state);
+ 
+         this.toolId = state.toolId;
++        this.parentToolId = state.parentToolId;
+         this.compilerService = hub.compilerService;
+ 
+         this.monacoStdin = state.monacoStdin || false;
+@@ -149,6 +157,8 @@ export class Tool extends MonacoPane<monaco.editor.IStandaloneCodeEditor, ToolSt
+         this.badLangToolbar = this.domRoot.find('.bad-lang');
+         this.optionsField = this.domRoot.find('input.options');
+         this.localStdinField = this.domRoot.find('textarea.tool-stdin');
++        this.nextToolsGroup = this.domRoot.find('.next-tools-group');
++        this.nextToolsMenu = this.domRoot.find('.next-tool-dropdown');
+     }
+ 
+     override registerCallbacks() {
+@@ -156,6 +166,8 @@ export class Tool extends MonacoPane<monaco.editor.IStandaloneCodeEditor, ToolSt
+         this.eventHub.on('languageChange', this.onLanguageChange, this);
+         this.eventHub.on('toolInputChange', this.onToolInputChange, this);
+         this.eventHub.on('toolInputViewClosed', this.onToolInputViewClosed, this);
++        this.eventHub.on('toolOpened', this.onToolOpened, this);
++        this.eventHub.on('toolClosed', this.onToolClosed, this);
+ 
+         this.toggleArgs.on('click', () => this.togglePanel(this.toggleArgs, this.panelArgs));
+ 
+@@ -185,6 +197,106 @@ export class Tool extends MonacoPane<monaco.editor.IStandaloneCodeEditor, ToolSt
+         if (this.compilerInfo.editorId && this.compilerInfo.editorId === editorId) {
+             const tools = await toolsService.getToolsForLang(newLangId);
+             this.toggleUsable(!!tools?.[this.toolId]);
++            this.initNextToolButtons(newLangId);
++        }
++    }
++
++    isToolActive(toolId: string): boolean {
++        const findTool = (content: any): boolean => {
++            if (content.componentName === 'tool') {
++                return (
++                    content.componentState.id === this.compilerInfo.compilerId &&
++                    content.componentState.toolId === toolId
++                );
++            }
++            return content.content?.some((child: any) => findTool(child)) || false;
++        };
++
++        if (!this.container.layoutManager.isInitialised) return false;
++        return findTool(this.container.layoutManager.toConfig());
++    }
++
++    initNextToolButton(button: JQuery<HTMLElement>, toolId: string): void {
++        const createToolView = () => {
++            const tools = this.currentLanguageId
++                ? toolsService.getCachedToolsForLang(this.currentLanguageId)
++                : undefined;
++            const tool = tools?.[toolId];
++            return Components.getToolViewWith(
++                this.compilerInfo.compilerId,
++                this.compilerInfo.compilerName,
++                this.compilerInfo.editorId ?? 0,
++                toolId,
++                tool?.args || '',
++                !!tool?.monacoStdin,
++                this.compilerInfo.treeId ?? 0,
++                this.toolId,
++            );
++        };
++        const hideMenu = () => BootstrapUtils.hideDropdown(this.nextToolsMenu);
++
++        createDragSource(this.container.layoutManager, button, createToolView).on('dragStart', hideMenu);
++        button.on('click', () => {
++            button.prop('disabled', true);
++            const insertPoint =
++                this.hub.findParentRowOrColumn(this.container.parent) ||
++                this.container.layoutManager.root.contentItems[0];
++            insertPoint.addChild(createToolView());
++        });
++        button.addClass('opens-singleton-pane');
++    }
++
++    initNextToolButtons(languageId: LanguageKey): void {
++        this.currentLanguageId = languageId;
++        this.nextToolsMenu.empty();
++
++        const tools = toolsService.getCachedToolsForLang(languageId);
++        const nextTools = tools?.[this.toolId]?.nextTools || [];
++        this.nextToolsGroup.toggleClass('d-none', nextTools.length === 0);
++
++        for (const toolId of nextTools) {
++            const tool = tools?.[toolId];
++            if (!tool) continue;
++
++            const button = $("<button class='dropdown-item btn btn-light btn-sm'>");
++            button.data('toolname', toolId);
++            button.attr('data-toolname', toolId);
++            if (tool.icon) {
++                const icon = getStaticImage(tool.icon, 'logos');
++                const darkIcon = tool.darkIcon ? getStaticImage(tool.darkIcon, 'logos') : icon;
++                button.append(
++                    '<span class="dropdown-icon fas">' +
++                        '<img src="' +
++                        icon +
++                        '" class="theme-light-only" width="16px" style="max-height: 16px"/>' +
++                        '<img src="' +
++                        darkIcon +
++                        '" class="theme-dark-only" width="16px" style="max-height: 16px"/>' +
++                        '</span>',
++                );
++            } else {
++                button.append("<span class='dropdown-icon fas fa-cog'></span>");
++            }
++            button.append(tool.name || toolId);
++            button.prop('disabled', this.isToolActive(toolId));
++            this.nextToolsMenu.append(button);
++            this.initNextToolButton(button, toolId);
++        }
++    }
++
++    onToolOpened(compilerId: number, toolState: ToolState) {
++        if (compilerId !== this.compilerInfo.compilerId || toolState.parentToolId !== this.toolId) return;
++        this.nextToolsMenu.find('button[data-toolname="' + toolState.toolId + '"]').prop('disabled', true);
++    }
++
++    onToolClosed(compilerId: number, toolState: ToolState) {
++        if (compilerId !== this.compilerInfo.compilerId) return;
++        if (toolState.toolId === this.parentToolId) {
++            this.container.close();
++            return;
++        }
++        if (toolState.parentToolId === this.toolId) {
++            this.nextToolsMenu.find('button[data-toolname="' + toolState.toolId + '"]').prop('disabled', false);
+         }
+     }
+ 
+@@ -360,6 +472,7 @@ export class Tool extends MonacoPane<monaco.editor.IStandaloneCodeEditor, ToolSt
+             ...super.getCurrentState(),
+             wrap: options.wrap,
+             toolId: this.toolId,
++            parentToolId: this.parentToolId,
+             args: this.getInputArgs(),
+             stdin: this.getInputStdin(),
+             stdinPanelShown: (this.monacoStdin && this.monacoEditorOpen) || !this.panelStdin.hasClass('d-none'),
+@@ -432,6 +545,8 @@ export class Tool extends MonacoPane<monaco.editor.IStandaloneCodeEditor, ToolSt
+                 ? toolsService.getCachedToolsForLang(compiler.lang)?.[this.toolId]
+                 : undefined;
+ 
++            this.initNextToolButtons(compiler.lang);
++
+             if (toolInfo) {
+                 this.toggleStdin.prop('disabled', false);
+ 
+diff --git a/static/services/tools.service.ts b/static/services/tools.service.ts
+index 3200689..6ae1ee7 100644
+--- a/static/services/tools.service.ts
++++ b/static/services/tools.service.ts
+@@ -36,8 +36,14 @@ export type ToolEntry = {
+     icon?: string;
+     darkIcon?: string;
+     stdinHint?: string;
++    nextTools?: string[];
+ };
+ 
++export function getRootToolIds(toolIds: string[], tools: Record<string, ToolEntry>): string[] {
++    const childToolIds = new Set(Object.values(tools).flatMap(tool => tool.nextTools || []));
++    return toolIds.filter(toolId => !childToolIds.has(toolId));
++}
++
+ export class ToolsService {
+     private readonly loadPromises = new Map<string, Promise<Record<string, ToolEntry>>>();
+     private readonly cache = new Map<string, Record<string, ToolEntry>>();
+diff --git a/static/tests/components-tests.ts b/static/tests/components-tests.ts
+index 08d96b5..adc218c 100644
+--- a/static/tests/components-tests.ts
++++ b/static/tests/components-tests.ts
+@@ -38,9 +38,23 @@ import {
+     createComponentConfig,
+     createLayoutItem,
+     fromGoldenLayoutConfig,
++    getToolViewWith,
+     toGoldenLayoutConfig,
+ } from '../../static/components.js';
+ 
++describe('Tool component configuration', () => {
++    it('persists the parent tool relationship', () => {
++        const component = getToolViewWith(1, 'P4', 2, 'child', '--pass', false, 0, 'parent');
++
++        expect(component.componentState).toMatchObject({
++            id: 1,
++            toolId: 'child',
++            parentToolId: 'parent',
++            args: '--pass',
++        });
++    });
++});
++
+ describe('Components validation', () => {
+     describe('fromGoldenLayoutConfig', () => {
+         describe('Input validation', () => {
+diff --git a/static/tests/tools-service-tests.ts b/static/tests/tools-service-tests.ts
+new file mode 100644
+index 0000000..9545b13
+--- /dev/null
++++ b/static/tests/tools-service-tests.ts
+@@ -0,0 +1,46 @@
++// Copyright (c) 2026, Compiler Explorer Authors
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++//     * Redistributions of source code must retain the above copyright notice,
++//       this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above copyright
++//       notice, this list of conditions and the following disclaimer in the
++//       documentation and/or other materials provided with the distribution.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++import {describe, expect, it} from 'vitest';
++
++import {getRootToolIds, ToolEntry} from '../services/tools.service.js';
++
++describe('tools service', () => {
++    it('keeps child tools out of the compiler Add tool menu', () => {
++        const tools = {
++            root: {
++                id: 'root',
++                name: 'Root',
++                type: 'postcompilation',
++                languageId: 'p4',
++                allowStdin: false,
++                nextTools: ['child'],
++            },
++            child: {id: 'child', name: 'Child', type: 'postcompilation', languageId: 'mlir_p4', allowStdin: false},
++            regular: {id: 'regular', name: 'Regular', type: 'independent', languageId: 'p4', allowStdin: false},
++        } satisfies Record<string, ToolEntry>;
++
++        expect(getRootToolIds(['root', 'child', 'regular'], tools)).toEqual(['root', 'regular']);
++    });
++});
+diff --git a/test/chained-tool-tests.ts b/test/chained-tool-tests.ts
+new file mode 100644
+index 0000000..d7f7eb8
+--- /dev/null
++++ b/test/chained-tool-tests.ts
+@@ -0,0 +1,191 @@
++// Copyright (c) 2026, Compiler Explorer Authors
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++//     * Redistributions of source code must retain the above copyright notice,
++//       this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above copyright
++//       notice, this list of conditions and the following disclaimer in the
++//       documentation and/or other materials provided with the distribution.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++import {describe, expect, it} from 'vitest';
++
++import {BaseCompiler} from '../lib/base-compiler.js';
++import {parseTools} from '../lib/compilation/compilation-request-parser.js';
++import {OptionsHandlerLibrary} from '../lib/options-handler.js';
++import {ChainedToolResult, IChainedTool, ToolEnv} from '../lib/tooling/base-tool.interface.js';
++import {BaseTool} from '../lib/tooling/base-tool.js';
++import {ActiveTool, CompilationInfo} from '../types/compilation/compilation.interfaces.js';
++import {ToolInfo, ToolResult} from '../types/tool.interfaces.js';
++
++const env = {
++    ceProps: (_key: string, defaultValue: unknown) => defaultValue,
++    compilerProps: (_key: string, defaultValue: unknown) => defaultValue,
++} as ToolEnv;
++
++class FakeChainedTool extends BaseTool implements IChainedTool {
++    calls: Array<{input: string; args: string[]}> = [];
++    shouldFail = false;
++
++    async runChainedTool(
++        _compilationInfo: CompilationInfo,
++        inputFilepath: string,
++        args: string[] = [],
++        _stdin?: string,
++        _supportedLibraries?: Record<string, OptionsHandlerLibrary>,
++    ): Promise<ChainedToolResult> {
++        this.calls.push({input: inputFilepath, args});
++        const result: ToolResult = {
++            id: this.id,
++            name: this.tool.name,
++            code: this.shouldFail ? 1 : 0,
++            languageId: this.tool.languageId,
++            stdout: [],
++            stderr: [],
++        };
++        return {
++            result,
++            outputFilename: this.shouldFail ? undefined : inputFilepath + '.' + this.id,
++        };
++    }
++}
++
++function makeTool(id: string, nextTools: string[] = []) {
++    return new FakeChainedTool(
++        {
++            id,
++            name: id,
++            type: 'postcompilation',
++            exe: '/bin/true',
++            exclude: [],
++            options: [],
++            nextTools,
++            compilerLanguage: 'p4',
++        } as ToolInfo,
++        env,
++    );
++}
++
++function makeCompiler(tools: FakeChainedTool[]) {
++    const compiler = Object.create(BaseCompiler.prototype) as BaseCompiler & {
++        possibleTools: FakeChainedTool[];
++        supportedLibraries: Record<string, OptionsHandlerLibrary>;
++    };
++    compiler.possibleTools = tools;
++    compiler.supportedLibraries = {};
++    return compiler;
++}
++
++const compilationInfo = {
++    code: 0,
++    inputFilename: '/tmp/example.p4',
++    outputFilename: '/tmp/output.mlir',
++} as CompilationInfo;
++
++describe('chained post-compilation tools', () => {
++    it('preserves parentToolId while normalizing request arguments', () => {
++        expect(parseTools([{id: 'child', args: '--pass one', stdin: '', parentToolId: 'root'}] as any)).toEqual([
++            {id: 'child', args: ['--pass', 'one'], stdin: '', parentToolId: 'root'},
++        ]);
++    });
++
++    it('passes each parent output to its child and preserves stage arguments', async () => {
++        const root = makeTool('root', ['child']);
++        const child = makeTool('child');
++        const compiler = makeCompiler([root, child]);
++        const active: ActiveTool[] = [
++            {id: 'root', args: ['--root-pass'], stdin: ''},
++            {id: 'child', args: ['--child-pass'], stdin: '', parentToolId: 'root'},
++        ];
++
++        const results = await compiler.runPostCompilationTools(active, compilationInfo);
++
++        expect(results.map(result => result.code)).toEqual([0, 0]);
++        expect(root.calls).toEqual([{input: '/tmp/output.mlir', args: ['--root-pass']}]);
++        expect(child.calls).toEqual([{input: '/tmp/output.mlir.root', args: ['--child-pass']}]);
++    });
++
++    it('does not run a child when its parent fails', async () => {
++        const root = makeTool('root', ['child']);
++        root.shouldFail = true;
++        const child = makeTool('child');
++        const compiler = makeCompiler([root, child]);
++
++        const results = await compiler.runPostCompilationTools(
++            [
++                {id: 'root', args: [], stdin: ''},
++                {id: 'child', args: [], stdin: '', parentToolId: 'root'},
++            ],
++            compilationInfo,
++        );
++
++        expect(results[0].code).toBe(1);
++        expect(results[1]).toMatchObject({code: 1, stdout: [], stderr: []});
++        expect(child.calls).toHaveLength(0);
++    });
++
++    it('rejects missing parents and undeclared child relationships', async () => {
++        const root = makeTool('root');
++        const child = makeTool('child');
++        const compiler = makeCompiler([root, child]);
++
++        const missing = await compiler.runPostCompilationTools(
++            [{id: 'child', args: [], stdin: '', parentToolId: 'missing'}],
++            compilationInfo,
++        );
++        const undeclared = await compiler.runPostCompilationTools(
++            [
++                {id: 'root', args: [], stdin: ''},
++                {id: 'child', args: [], stdin: '', parentToolId: 'root'},
++            ],
++            compilationInfo,
++        );
++
++        expect(missing[0].stderr[0].text).toContain('Parent tool is not active');
++        expect(undeclared[1].stderr[0].text).toContain('not an allowed child');
++        expect(child.calls).toHaveLength(0);
++    });
++
++    it('rejects child tools submitted without their configured parent', async () => {
++        const root = makeTool('root', ['child']);
++        const child = makeTool('child');
++        const compiler = makeCompiler([root, child]);
++
++        const results = await compiler.runPostCompilationTools([{id: 'child', args: [], stdin: ''}], compilationInfo);
++
++        expect(results[0].stderr[0].text).toContain('requires an active parent');
++        expect(child.calls).toHaveLength(0);
++    });
++
++    it('rejects dependency cycles', async () => {
++        const first = makeTool('first', ['second']);
++        const second = makeTool('second', ['first']);
++        const compiler = makeCompiler([first, second]);
++
++        const results = await compiler.runPostCompilationTools(
++            [
++                {id: 'first', args: [], stdin: '', parentToolId: 'second'},
++                {id: 'second', args: [], stdin: '', parentToolId: 'first'},
++            ],
++            compilationInfo,
++        );
++
++        expect(results.every(result => result.code !== 0)).toBe(true);
++        expect(first.calls).toHaveLength(0);
++        expect(second.calls).toHaveLength(0);
++    });
++});
+diff --git a/test/handlers/api-tests.ts b/test/handlers/api-tests.ts
+index d06db5c..bc10b23 100644
+--- a/test/handlers/api-tests.ts
++++ b/test/handlers/api-tests.ts
+@@ -237,6 +237,7 @@ describe('API tools endpoint', () => {
+             languageId: 'c++',
+             allowStdin: true,
+             stdinHint: 'enabled',
++            nextTools: [],
+         });
+     });
+ 
+diff --git a/test/options-handler.ts b/test/options-handler.ts
+index 2a59783..59b5955 100644
+--- a/test/options-handler.ts
++++ b/test/options-handler.ts
+@@ -85,6 +85,7 @@ const optionsProps = {
+     'tools.faketool.type': 'independent',
+     'tools.faketool.class': 'testing-tool',
+     'tools.faketool.stdinHint': 'disabled',
++    'tools.faketool.nextTools': 'someothertool',
+     'tools.someothertool.name': 'Some Other Tool',
+     'tools.someothertool.exe': CURRENT_FILE_PATH,
+     'tools.someothertool.type': 'independent',
+@@ -545,6 +546,7 @@ describe('Options handler', () => {
+                         languageId: undefined,
+                         monacoStdin: undefined,
+                         name: 'Fake Tool',
++                        nextTools: ['someothertool'],
+                         options: [],
+                         stdinHint: 'disabled',
+                         type: 'independent',
+@@ -567,6 +569,7 @@ describe('Options handler', () => {
+                         languageId: undefined,
+                         monacoStdin: undefined,
+                         name: 'Some Other Tool',
++                        nextTools: [],
+                         options: [],
+                         stdinHint: 'disabled',
+                         type: 'independent',
+diff --git a/types/compilation/compilation.interfaces.ts b/types/compilation/compilation.interfaces.ts
+index 2735e7e..5db8096 100644
+--- a/types/compilation/compilation.interfaces.ts
++++ b/types/compilation/compilation.interfaces.ts
+@@ -49,6 +49,7 @@ export type ActiveTool = {
+     id: string;
+     args: string[];
+     stdin: string;
++    parentToolId?: string;
+ };
+ 
+ // This is a legacy type that allows a single string to be passed as args but is otherwise identical to ActiveTool:
+diff --git a/types/tool.interfaces.ts b/types/tool.interfaces.ts
+index 3e72b3f..6dee1a7 100644
+--- a/types/tool.interfaces.ts
++++ b/types/tool.interfaces.ts
+@@ -41,6 +41,7 @@ export type ToolInfo = {
+     monacoStdin?: boolean;
+     icon?: string;
+     darkIcon?: string;
++    nextTools?: string[];
+     compilerLanguage: LanguageKey;
+ };
+ 
+diff --git a/views/templates/panes/tool-output.pug b/views/templates/panes/tool-output.pug
+index af36f3e..e099a79 100644
+--- a/views/templates/panes/tool-output.pug
++++ b/views/templates/panes/tool-output.pug
+@@ -18,6 +18,11 @@
+       button.btn.btn-sm.btn-light.artifact-btn(title="Download generated artifact" aria-label="Download generated artifact")
+         span.fa.fa-download
+         span.hideable.artifact-text Download
++      .btn-group.btn-group-sm.next-tools-group.d-none
++        button.btn.btn-sm.btn-light.dropdown-toggle.add-next-tool(type="button" title="Add next tool" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false" aria-label="Add a tool that consumes this tool's output")
++          span.fas.fa-tools
++          span.hideable Next tools
++        .dropdown-menu.dropdown-menu-end.next-tool-dropdown
+   .top-bar.btn-toolbar.bg-light.panel-args.d-none(role="toolbar")
+     input.options.form-control(type="text" placeholder="Tool arguments..." size="256" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false")
+   .top-bar.btn-toolbar.bg-light.panel-stdin.d-none(role="toolbar")
