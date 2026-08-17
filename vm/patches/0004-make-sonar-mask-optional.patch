@@ -1,0 +1,10 @@
+diff --git a/etc/nsjail/user-execution.cfg b/etc/nsjail/user-execution.cfg
+--- a/etc/nsjail/user-execution.cfg
++++ b/etc/nsjail/user-execution.cfg
+@@ -223,5 +223,6 @@ mount {
+     dst: "/opt/compiler-explorer/sonar"
+     fstype: "tmpfs"
++    mandatory: false
+ }
+ 
+ # TODO: this is commented out per @apmorton's advice for now:
