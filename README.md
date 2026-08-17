@@ -126,7 +126,7 @@ ssh -i "$CE_VM_SSH_KEY" -p "${CE_VM_SSH_PORT:-2223}" \
 | Clang/LLVM | `scripts/toolchains/update-clang.sh` |
 | GCC | `scripts/toolchains/update-gcc.sh [x86_64\|riscv64\|all]` |
 | Lean 4 | `scripts/toolchains/update-lean4.sh [版本号\|latest]` |
-| 自研 P4 工具链 | `scripts/toolchains/deploy-p4.sh <p4mlir-short_hash.tar.gz>` |
+| 自研 P4 工具链 | `scripts/toolchains/deploy-p4.sh <p4mlir-short_hash.tar.gz\|tar.zst>` |
 | CE 本体 | `scripts/update-ce.sh gh-<release>` |
 
 工具链使用版本目录和相对 `*-latest` 软链。更新器会从真实二进制读取版本并同步 CE 配置，因此版本升级产生配置 Git diff 是预期行为。统一入口在全部更新后只重启一次 CE。
@@ -152,7 +152,7 @@ CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 - Clang 包提供 C/C++、LLVM IR 的 `clang`/`opt`/`llc` 和 LLVM MIR 的 `llc`。
 - GCC 包提供 x86_64 与 riscv64 工具链。
 - Lean 更新器安装并验证 `lean` 与 `leanc`。
-- 自研 P4 工具链以 `p4mlir-<short_hash>.tar.gz` 发布为 `p4mlir-<short_hash>/` 并切换 `p4-latest` 软链，包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；缺少时对应编译器隐藏。
+- 自研 P4 工具链以 `p4mlir-<short_hash>.tar.gz`（或 `.tar.zst`）发布为 `p4mlir-<short_hash>/` 并切换 `p4-latest` 软链，包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；缺少时对应编译器隐藏。
 - MLIR 编译器 p4mlir-opt、p4mlir-to-json、mlir-translate 来自 `p4-latest`。
 - LLVM IR P4 由 patch 添加，与 LLVM IR 同模式；编译器 P4 opt (latest)、P4 llc (latest) 来自 `p4-latest`。
 - Alive2 只预配置 `/opt/compiler-explorer/alive2-latest/bin/alive-tv`；缺少时菜单隐藏且启动 warning 属于预期。

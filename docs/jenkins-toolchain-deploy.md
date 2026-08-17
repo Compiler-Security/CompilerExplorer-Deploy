@@ -257,7 +257,7 @@ pipeline {
 - `CE_DEFER_RESTART=1` 让发布脚本只切换软链，由 `Restart CE` 阶段统一重启 VM 内的 `ce.service`。
 - `post.always` 清理部署机上的临时 tarball；`deploy-p4.sh` 已把内容解压进 `compilers`，删除 tarball 不影响已发布版本。
 - `StrictHostKeyChecking=accept-new` 适合首次接入，稳定后建议在 agent 上预置 `known_hosts` 并固定指纹。
-- 发布其他工具链时复制相应 `deploy-*.sh` 的模式；`deploy-p4.sh` 接收 `p4mlir-<short_hash>.tar.gz`，要求归档含 `bin/p4c`、`bin/p4mlir-opt`、`bin/p4mlir-translate`、`bin/p4mlir-to-json`、`bin/mlir-translate` 及 `bin/clang`/`bin/clang++`/`bin/opt`/`bin/llc`/`bin/llvm-objdump`/`bin/llvm-cxxfilt`。
+- 发布其他工具链时复制相应 `deploy-*.sh` 的模式；`deploy-p4.sh` 接收 `p4mlir-<short_hash>.tar.gz` 或 `.tar.zst`（zst 需要部署机有 `zstd`），要求归档含 `bin/p4c`、`bin/p4mlir-opt`、`bin/p4mlir-translate`、`bin/p4mlir-to-json`、`bin/mlir-translate` 及 `bin/clang`/`bin/clang++`/`bin/opt`/`bin/llc`/`bin/llvm-objdump`/`bin/llvm-cxxfilt`。
 
 ## 验证
 

@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
 # 原子发布 P4 工具链 tarball：解压为 p4mlir-<short_hash>/ 并将 p4-latest 软链指向它。
-# 用法：deploy-p4.sh <p4mlir-<short_hash>.tar.gz>
+# 用法：deploy-p4.sh <p4mlir-<short_hash>.tar.gz|p4mlir-<short_hash>.tar.zst>
 set -euo pipefail
 
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 LINK_NAME="p4-latest"
-ARCHIVE="${1:?用法: deploy-p4.sh <p4mlir-<short_hash>.tar.gz>}"
-[[ "$#" -eq 1 ]] || { echo "用法: $0 <p4mlir-<short_hash>.tar.gz>" >&2; exit 2; }
+ARCHIVE="${1:?用法: deploy-p4.sh <p4mlir-<short_hash>.tar.gz|p4mlir-<short_hash>.tar.zst>}"
+[[ "$#" -eq 1 ]] || { echo "用法: $0 <p4mlir-<short_hash>.tar.gz|p4mlir-<short_hash>.tar.zst>" >&2; exit 2; }
 [[ -f "${ARCHIVE}" ]] || { echo "错误: 归档不存在: ${ARCHIVE}" >&2; exit 1; }
 
 archive_name="$(basename "${ARCHIVE}")"
-[[ "${archive_name}" =~ ^p4mlir-([A-Za-z0-9][A-Za-z0-9._-]{0,127})\.tar\.gz$ ]] \
-  || { echo "错误: 归档文件名必须是 p4mlir-<short_hash>.tar.gz: ${archive_name}" >&2; exit 1; }
+[[ "${archive_name}" =~ ^p4mlir-([A-Za-z0-9][A-Za-z0-9._-]{0,127})\.tar\.(gz|zst)$ ]] \
+  || { echo "错误: 归档文件名必须是 p4mlir-<short_hash>.tar.gz 或 p4mlir-<short_hash>.tar.zst: ${archive_name}" >&2; exit 1; }
 BUILD_ID="${BASH_REMATCH[1]}"
+ARCHIVE_FORMAT="${BASH_REMATCH[2]}"
 TARGET="${CE_COMPILERS_ROOT}/p4mlir-${BUILD_ID}"
 
 required_exes="bin/p4c bin/p4mlir-opt bin/p4mlir-translate bin/p4mlir-to-json bin/mlir-translate bin/clang bin/clang++ bin/opt bin/llc bin/llvm-objdump bin/llvm-cxxfilt"
 
 require_commands tar
+[[ "${ARCHIVE_FORMAT}" == "gz" ]] || require_commands zstd
 lock_toolchains
 
 [[ ! -e "${TARGET}" && ! -L "${TARGET}" ]] \
@@ -29,7 +31,11 @@ echo ">> 发布 ${archive_name} -> ${TARGET}"
 TOOLCHAIN_PARTIAL="${CE_COMPILERS_ROOT}/.${LINK_NAME}.partial.$$"
 trap toolchain_cleanup EXIT
 mkdir -p "${TOOLCHAIN_PARTIAL}"
-tar -xzf "${ARCHIVE}" -C "${TOOLCHAIN_PARTIAL}"
+if [[ "${ARCHIVE_FORMAT}" == "gz" ]]; then
+  tar -xzf "${ARCHIVE}" -C "${TOOLCHAIN_PARTIAL}"
+else
+  zstd -dc "${ARCHIVE}" | tar -x -C "${TOOLCHAIN_PARTIAL}"
+fi
 
 # 兼容两种打包方式：内容直接在根，或包含单个顶层目录。
 if [[ ! -d "${TOOLCHAIN_PARTIAL}/bin" ]]; then
