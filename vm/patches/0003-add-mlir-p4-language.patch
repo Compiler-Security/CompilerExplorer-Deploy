@@ -1,0 +1,45 @@
+diff --git a/examples/mlir_p4/default.mlir b/examples/mlir_p4/default.mlir
+new file mode 100644
+index 0000000..92fc860
+--- /dev/null
++++ b/examples/mlir_p4/default.mlir
+@@ -0,0 +1,5 @@
++// p4mlir 工具链兼容标准 MLIR 方言；也可换成含 p4 方言的 IR 试用 p4mlir 专有 pass。
++func.func @square(%arg0: i32) -> i32 {
++  %0 = arith.muli %arg0, %arg0 : i32
++  return %0 : i32
++}
+diff --git a/lib/languages.ts b/lib/languages.ts
+index 04be9a0..37bf8ee 100644
+--- a/lib/languages.ts
++++ b/lib/languages.ts
+@@ -342,6 +342,17 @@ const definitions: Record<LanguageKey, LanguageDefinition> = {
+         previewFilter: null,
+         monacoDisassembly: null,
+     },
++    mlir_p4: {
++        name: 'MLIR P4',
++        monaco: 'mlir',
++        extensions: ['.mlir'],
++        alias: [],
++        logoFilename: 'mlir.svg',
++        formatter: null,
++        logoFilenameDark: null,
++        previewFilter: null,
++        monacoDisassembly: null,
++    },
+     cppx: {
+         name: 'Cppx',
+         monaco: 'cppp',
+diff --git a/types/languages.interfaces.ts b/types/languages.interfaces.ts
+index 8711bc0..d2744a1 100644
+--- a/types/languages.interfaces.ts
++++ b/types/languages.interfaces.ts
+@@ -82,6 +82,7 @@ export type LanguageKey =
+     | 'makefile'
+     | 'maven'
+     | 'mlir'
++    | 'mlir_p4'
+     | 'modula2'
+     | 'mojo'
+     | 'nim'
