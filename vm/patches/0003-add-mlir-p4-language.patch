@@ -22,7 +22,7 @@ index 04be9a0..37bf8ee 100644
 +        monaco: 'mlir',
 +        extensions: ['.mlir'],
 +        alias: [],
-+        logoFilename: 'mlir.svg',
++        logoFilename: 'p4.svg',
 +        formatter: null,
 +        logoFilenameDark: null,
 +        previewFilter: null,
@@ -42,4 +42,4 @@ index 8711bc0..d2744a1 100644
 +    | 'mlir_p4'
      | 'modula2'
      | 'mojo'
-     | 'nim'
+    | 'nim'

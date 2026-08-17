@@ -19,7 +19,7 @@ diff --git a/lib/languages.ts b/lib/languages.ts
 +        monaco: 'llvm-ir',
 +        extensions: ['.ll'],
 +        alias: [],
-+        logoFilename: 'llvm.png',
++        logoFilename: 'p4.svg',
 +        logoFilenameDark: null,
 +        formatter: null,
 +        previewFilter: null,
@@ -38,4 +38,4 @@ diff --git a/types/languages.interfaces.ts b/types/languages.interfaces.ts
 +    | 'llvm_p4'
      | 'lua'
      | 'makefile'
-     | 'maven'
+    | 'maven'
