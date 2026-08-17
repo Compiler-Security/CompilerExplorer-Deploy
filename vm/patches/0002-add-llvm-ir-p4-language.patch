@@ -38,4 +38,4 @@ diff --git a/types/languages.interfaces.ts b/types/languages.interfaces.ts
 +    | 'llvm_p4'
      | 'lua'
      | 'makefile'
-    | 'maven'
+     | 'maven'
