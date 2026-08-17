@@ -147,13 +147,14 @@ CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 
 ## 工具链与配置
 
-默认加载 `c,c++,lean,llvm,llvm_mir,mlir,p4`：
+默认加载 `c,c++,lean,llvm,llvm_mir,llvm_p4,mlir,p4`：
 
 - Clang 包提供 C/C++、LLVM IR 的 `clang`/`opt`/`llc` 和 LLVM MIR 的 `llc`。
 - GCC 包提供 x86_64 与 riscv64 工具链。
 - Lean 更新器安装并验证 `lean` 与 `leanc`。
 - 自研 P4 工具链以 `p4mlir-<short_hash>.tar.gz` 发布为 `p4mlir-<short_hash>/` 并切换 `p4-latest` 软链，包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；缺少时对应编译器隐藏。
 - MLIR 编译器 p4mlir-opt、p4mlir-to-json、mlir-translate 来自 `p4-latest`。
+- LLVM IR P4 由 patch 添加，与 LLVM IR 同模式；编译器 P4 opt (latest)、P4 llc (latest) 来自 `p4-latest`。
 - Alive2 只预配置 `/opt/compiler-explorer/alive2-latest/bin/alive-tv`；缺少时菜单隐藏且启动 warning 属于预期。
 - P4 patch 提供语言、图标和语法高亮；编译器 p4c、p4mlir-translate 来自 `p4-latest`。
 

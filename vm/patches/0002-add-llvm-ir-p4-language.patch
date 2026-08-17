@@ -1,0 +1,41 @@
+diff --git a/examples/llvm_p4/default.ll b/examples/llvm_p4/default.ll
+new file mode 100644
+--- /dev/null
++++ b/examples/llvm_p4/default.ll
+@@ -0,0 +1,4 @@
++define i32 @square(i32) local_unnamed_addr #0 {
++    %2 = mul nsw i32 %0, %0
++    ret i32 %2
++}
+diff --git a/lib/languages.ts b/lib/languages.ts
+--- a/lib/languages.ts
++++ b/lib/languages.ts
+@@ -674,6 +674,17 @@ const definitions: Record<LanguageKey, LanguageDefinition> = {
+         previewFilter: null,
+         monacoDisassembly: null,
+     },
++    llvm_p4: {
++        name: 'LLVM IR P4',
++        monaco: 'llvm-ir',
++        extensions: ['.ll'],
++        alias: [],
++        logoFilename: 'llvm.png',
++        logoFilenameDark: null,
++        formatter: null,
++        previewFilter: null,
++        monacoDisassembly: null,
++    },
+     lua: {
+         name: 'Lua',
+         monaco: 'lua',
+diff --git a/types/languages.interfaces.ts b/types/languages.interfaces.ts
+--- a/types/languages.interfaces.ts
++++ b/types/languages.interfaces.ts
+@@ -78,6 +78,7 @@ export type LanguageKey =
+     | 'lean'
+     | 'llvm'
+     | 'llvm_mir'
++    | 'llvm_p4'
+     | 'lua'
+     | 'makefile'
+     | 'maven'
