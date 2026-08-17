@@ -19,6 +19,7 @@ ARCHIVE_FORMAT="${BASH_REMATCH[2]}"
 TARGET="${CE_COMPILERS_ROOT}/p4mlir-${BUILD_ID}"
 
 required_exes="bin/p4c bin/p4mlir-opt bin/p4mlir-translate bin/p4mlir-to-json bin/mlir-translate bin/opt bin/llc bin/llvm-objdump bin/llvm-cxxfilt"
+required_files="share/p4c/p4include/core.p4"
 
 require_commands tar
 [[ "${ARCHIVE_FORMAT}" == "gz" ]] || require_commands zstd
@@ -49,6 +50,10 @@ fi
 
 toolchain_has_executables "${TOOLCHAIN_PARTIAL}" "${required_exes}" \
   || { echo "错误: 归档缺少必要可执行文件（${required_exes}）。" >&2; exit 1; }
+for required_file in ${required_files}; do
+  [[ -f "${TOOLCHAIN_PARTIAL}/${required_file}" ]] \
+    || { echo "错误: 归档缺少必要文件 ${required_file}。" >&2; exit 1; }
+done
 
 mv -T "${TOOLCHAIN_PARTIAL}" "${TARGET}"
 TOOLCHAIN_PARTIAL=""
