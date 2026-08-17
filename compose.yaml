@@ -53,11 +53,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=256m,uid=0,gid=0,mode=1777
-      # 上游 user-execution.cfg 有一条 mandatory 挂载：用 tmpfs 覆盖
-      # /opt/compiler-explorer/sonar（隐藏 sonar 扫描器）。9p 导出是只读的，
-      # 挂载点不存在时 nsjail 无法 mkdir，整个执行沙箱启动失败。
-      # 在这里预置空目录（容器内 tmpfs，guest 经 9p 看到的仍是只读空目录）。
-      - /share/compilers/sonar:rw,size=1m
 
     mem_limit: "${QEMU_MEM_LIMIT:-10g}"
     cpus: "${QEMU_CPUS:-10}"
