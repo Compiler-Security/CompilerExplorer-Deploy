@@ -160,7 +160,7 @@ CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 
 语言配置集中在 `config/<语言>.local.properties`；全局资源与安全限制位于 `compiler-explorer.local.properties`，nsjail 入口位于 `execution.local.properties`。
 
-默认只允许编译，不运行用户程序。源码定制位于 `vm/patches/`，`scripts/apply-ce-patches.sh` 按四位数字前缀依次应用；升级 `CE_REF` 时需确认补丁仍可应用。
+C、C++、Lean 4 与 LLVM IR（clang-ir）支持在线执行用户程序，运行由 nsjail 沙箱隔离；riscv64 交叉产物因 VM 内无 qemu-user 仅可编译，其余语言仅编译。源码定制位于 `vm/patches/`，`scripts/apply-ce-patches.sh` 按四位数字前缀依次应用；升级 `CE_REF` 时需确认补丁仍可应用。
 
 ## Kata 备选路径
 
