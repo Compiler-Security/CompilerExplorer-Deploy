@@ -35,7 +35,7 @@ services:
       - "${CE_VM_SSH_PUBKEY:-/dev/null}:/share/sshpub/ce_vm_key.pub:ro"
 
     ports:
-      - "127.0.0.1:10240:10240"
+      - "10240:10240"
       - "127.0.0.1:${CE_VM_SSH_PORT:-2223}:${CE_VM_SSH_PORT:-2223}"
 
     stop_grace_period: 40s

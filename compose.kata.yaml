@@ -39,7 +39,7 @@ services:
       # Kata 已提供 VM 边界，不启用容器内 nsjail。
 
     ports:
-      - "${CE_BIND_ADDR:-127.0.0.1}:10240:10240"
+      - "10240:10240"
 
     mem_limit: 6g
     cpus: 8
