@@ -18,7 +18,7 @@ BUILD_ID="${BASH_REMATCH[1]}"
 ARCHIVE_FORMAT="${BASH_REMATCH[2]}"
 TARGET="${CE_COMPILERS_ROOT}/p4mlir-${BUILD_ID}"
 
-required_exes="bin/p4c bin/p4mlir-opt bin/p4mlir-translate bin/p4mlir-to-json bin/mlir-translate bin/clang bin/clang++ bin/opt bin/llc bin/llvm-objdump bin/llvm-cxxfilt"
+required_exes="bin/p4c bin/p4mlir-opt bin/p4mlir-translate bin/p4mlir-to-json bin/mlir-translate bin/opt bin/llc bin/llvm-objdump bin/llvm-cxxfilt"
 
 require_commands tar
 [[ "${ARCHIVE_FORMAT}" == "gz" ]] || require_commands zstd
