@@ -1,0 +1,57 @@
+diff --git a/lib/compilers/lean.ts b/lib/compilers/lean.ts
+index 73b25e0..93b9c9d 100644
+--- a/lib/compilers/lean.ts
++++ b/lib/compilers/lean.ts
+@@ -168,4 +168,52 @@ export class LeanCompiler extends BaseCompiler {
+             languageId: 'asm',
+         };
+     }
++
++    override async buildExecutable(
++        compiler: string,
++        options: string[],
++        inputFilename: string,
++        execOptions: ExecutionOptionsWithEnv,
++    ): Promise<CompilationResult> {
++        if (!execOptions) {
++            execOptions = this.getDefaultExecOptions();
++        }
++
++        const tmpDir = path.dirname(inputFilename);
++        if (!execOptions.customCwd) {
++            execOptions.customCwd = tmpDir;
++        }
++
++        const outputFilename = this.getExecutableFilename(tmpDir, this.outputFilebase);
++        const cOutputOption = options.find(option => option.startsWith('--c='));
++        const cOutputFilename =
++            cOutputOption?.substring('--c='.length) || this.getLeanCOutputFilename(outputFilename);
++
++        const {leanOptions, leancOptions} = this.partitionOptionsForSteps(options, inputFilename);
++        const leanResult = await this.doLeanBuildstep(compiler, leanOptions, execOptions, inputFilename);
++
++        if (leanResult.code !== 0) {
++            return {
++                ...leanResult,
++                inputFilename,
++                languageId: 'asm',
++            };
++        }
++
++        const leanc = await this.getLeancPath(compiler, execOptions);
++        const leancResult = await this.doBuildstep(
++            leanc,
++            [...leancOptions, cOutputFilename, '-o', outputFilename],
++            execOptions,
++        );
++
++        return {
++            ...leancResult,
++            okToCache: leanResult.okToCache && leancResult.okToCache,
++            stdout: leanResult.stdout.concat(leancResult.stdout),
++            stderr: leanResult.stderr.concat(leancResult.stderr),
++            inputFilename,
++            languageId: 'asm',
++        };
++    }
+ }
