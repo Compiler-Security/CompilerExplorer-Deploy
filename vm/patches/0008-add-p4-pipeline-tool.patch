@@ -1,0 +1,342 @@
+diff --git a/lib/tooling/_all.ts b/lib/tooling/_all.ts
+index 37c0657..169a93e 100644
+--- a/lib/tooling/_all.ts
++++ b/lib/tooling/_all.ts
+@@ -39,6 +39,7 @@ export {MicrosoftAnalysisTool} from './microsoft-analysis-tool.js';
+ export {MiriTool} from './miri-tool.js';
+ export {NmTool} from './nm-tool.js';
+ export {OSACATool} from './osaca-tool.js';
++export {P4PipelineTool} from './p4-pipeline-tool.js';
+ export {PaholeTool} from './pahole-tool.js';
+ export {PvsStudioTool} from './pvs-studio-tool.js';
+ export {ReadElfTool} from './readelf-tool.js';
+diff --git a/lib/tooling/p4-pipeline-tool.ts b/lib/tooling/p4-pipeline-tool.ts
+new file mode 100644
+index 0000000..ea78318
+--- /dev/null
++++ b/lib/tooling/p4-pipeline-tool.ts
+@@ -0,0 +1,148 @@
++// Copyright (c) 2026, Compiler Explorer Authors
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++//     * Redistributions of source code must retain the above copyright notice,
++//       this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above copyright
++//       notice, this list of conditions and the following disclaimer in the
++//       documentation and/or other materials provided with the distribution.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++import fs from 'node:fs/promises';
++import path from 'node:path';
++
++import {CompilationInfo, ExecutionOptions} from '../../types/compilation/compilation.interfaces.js';
++import {UnprocessedExecResult} from '../../types/execution/execution.interfaces.js';
++import {OptionsHandlerLibrary} from '../options-handler.js';
++import {ChainedToolResult, IChainedTool} from './base-tool.interface.js';
++import {BaseTool} from './base-tool.js';
++
++const outputExtensions: Record<string, string> = {
++    'p4pipe-mlir-opt': '.llvm.mlir',
++    'p4pipe-mlir-translate': '.ll',
++    'p4pipe-opt': '.opt.ll',
++    'p4pipe-mir': '.mir',
++    'p4pipe-llc': '.s',
++};
++
++export class P4PipelineTool extends BaseTool implements IChainedTool {
++    static get key() {
++        return 'p4-pipeline-tool';
++    }
++
++    private getOutputFilename(inputFilepath: string): string | undefined {
++        const extension = outputExtensions[this.id];
++        if (!extension) return undefined;
++        return path.join(path.dirname(inputFilepath), this.getUniqueFilePrefix() + extension);
++    }
++
++    private validateUserArgs(args: string[]): string | undefined {
++        if (
++            args.some(arg => arg === '-o' || arg.startsWith('-o=') || arg === '--output' || arg.startsWith('--output='))
++        ) {
++            return 'The output option is managed by Compiler Explorer and cannot be overridden';
++        }
++        if (this.id === 'p4pipe-mir' && !args.some(arg => /^--?stop-(before|after)(=|$)/.test(arg))) {
++            return 'MIR generation requires -stop-before=... or -stop-after=...';
++        }
++        return undefined;
++    }
++
++    private getExecOptions(compilationInfo: CompilationInfo, inputFilepath: string): ExecutionOptions {
++        const baseOptions = compilationInfo.execOptions || this.getDefaultExecOptions();
++        return {
++            ...baseOptions,
++            env: baseOptions.env ? {...baseOptions.env} : undefined,
++            ldPath: compilationInfo.preparedLdPaths
++                ? [...compilationInfo.preparedLdPaths]
++                : baseOptions.ldPath
++                  ? [...baseOptions.ldPath]
++                  : undefined,
++            customCwd: path.dirname(inputFilepath),
++            input: undefined,
++        };
++    }
++
++    private async readOutput(outputFilename: string): Promise<{contents: string; truncated: boolean}> {
++        const maxSize = Math.max(0, Number(this.env.ceProps('max-asm-size', 64 * 1024 * 1024)));
++        const handle = await fs.open(outputFilename, 'r');
++        try {
++            const stat = await handle.stat();
++            const readSize = Math.min(stat.size, maxSize);
++            const buffer = Buffer.alloc(readSize);
++            if (readSize > 0) await handle.read(buffer, 0, readSize, 0);
++            return {contents: buffer.toString('utf8'), truncated: stat.size > maxSize};
++        } finally {
++            await handle.close();
++        }
++    }
++
++    private convertFailure(result: UnprocessedExecResult, inputFilepath: string) {
++        const converted = this.convertResult(result, inputFilepath, path.dirname(this.tool.exe));
++        return {result: converted};
++    }
++
++    async runChainedTool(
++        compilationInfo: CompilationInfo,
++        inputFilepath: string,
++        args: string[] = [],
++        _stdin?: string,
++        _supportedLibraries?: Record<string, OptionsHandlerLibrary>,
++    ): Promise<ChainedToolResult> {
++        const outputFilename = this.getOutputFilename(inputFilepath);
++        if (!outputFilename) return {result: this.createErrorResponse(`Unknown P4 pipeline stage: ${this.id}`)};
++
++        const validationError = this.validateUserArgs(args);
++        if (validationError) return {result: this.createErrorResponse(validationError)};
++
++        const toolArgs = [...this.tool.options, ...args, '-o', outputFilename, inputFilepath];
++        let execResult: UnprocessedExecResult;
++        try {
++            execResult = await this.exec(
++                this.getToolExe(compilationInfo),
++                toolArgs,
++                this.getExecOptions(compilationInfo, inputFilepath),
++            );
++        } catch {
++            return {result: this.createErrorResponse('Error while running P4 pipeline tool')};
++        }
++
++        if (execResult.code !== 0) return this.convertFailure(execResult, inputFilepath);
++
++        let output: {contents: string; truncated: boolean};
++        try {
++            output = await this.readOutput(outputFilename);
++        } catch {
++            return {result: this.createErrorResponse('P4 pipeline tool did not produce its expected output file')};
++        }
++
++        if (output.truncated) output.contents += '\n<Output truncated; the complete file is used by the next tool>';
++        const transformedInput = execResult.filenameTransform(inputFilepath);
++        const diagnostics = [execResult.stderr, execResult.stdout].filter(Boolean).join('\n');
++        return {
++            result: {
++                id: this.id,
++                name: this.tool.name,
++                code: 0,
++                languageId: this.tool.languageId,
++                stdout: this.parseOutput(output.contents),
++                stderr: this.parseOutput(diagnostics, transformedInput, path.dirname(this.tool.exe)),
++            },
++            outputFilename,
++        };
++    }
++}
+diff --git a/test/p4-pipeline-tool-tests.ts b/test/p4-pipeline-tool-tests.ts
+new file mode 100644
+index 0000000..0092230
+--- /dev/null
++++ b/test/p4-pipeline-tool-tests.ts
+@@ -0,0 +1,170 @@
++// Copyright (c) 2026, Compiler Explorer Authors
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++//     * Redistributions of source code must retain the above copyright notice,
++//       this list of conditions and the following disclaimer.
++//     * Redistributions in binary form must reproduce the above copyright
++//       notice, this list of conditions and the following disclaimer in the
++//       documentation and/or other materials provided with the distribution.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++
++import {afterEach, beforeEach, describe, expect, it} from 'vitest';
++
++import {ToolEnv} from '../lib/tooling/base-tool.interface.js';
++import {P4PipelineTool} from '../lib/tooling/p4-pipeline-tool.js';
++import {CompilationInfo, ExecutionOptions} from '../types/compilation/compilation.interfaces.js';
++import {UnprocessedExecResult} from '../types/execution/execution.interfaces.js';
++import {ToolInfo} from '../types/tool.interfaces.js';
++
++class TestP4PipelineTool extends P4PipelineTool {
++    calls: Array<{exe: string; args: string[]; options: ExecutionOptions}> = [];
++    code = 0;
++    output = 'generated output';
++    produceOutput = true;
++
++    override async exec(exe: string, args: string[], options: ExecutionOptions): Promise<UnprocessedExecResult> {
++        this.calls.push({exe, args, options});
++        const outputIndex = args.indexOf('-o');
++        if (this.code === 0 && this.produceOutput && outputIndex >= 0) {
++            await fs.writeFile(args[outputIndex + 1], this.output);
++        }
++        return {
++            code: this.code,
++            okToCache: true,
++            filenameTransform: filename => filename,
++            stdout: this.code === 0 ? '' : 'tool stdout',
++            stderr: this.code === 0 ? '' : 'tool stderr',
++            execTime: 1,
++            timedOut: false,
++            truncated: false,
++        };
++    }
++}
++
++let tempDir: string;
++let maxOutputSize = 1024;
++
++const env = {
++    ceProps: (key: string, defaultValue: unknown) => (key === 'max-asm-size' ? maxOutputSize : defaultValue),
++    compilerProps: (_key: string, defaultValue: unknown) => defaultValue,
++} as ToolEnv;
++
++const compilationInfo = {
++    compiler: {lang: 'p4'},
++    execOptions: {env: {PIPELINE_TEST: '1'}},
++    preparedLdPaths: ['/toolchain/lib'],
++} as unknown as CompilationInfo;
++
++function makeTool(id: string, options: string[] = []) {
++    return new TestP4PipelineTool(
++        {
++            id,
++            name: id,
++            type: 'postcompilation',
++            exe: `/toolchain/bin/${id}`,
++            exclude: [],
++            options,
++            languageId: 'llvm_p4',
++            compilerLanguage: 'p4',
++        } as ToolInfo,
++        env,
++    );
++}
++
++beforeEach(async () => {
++    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ce-p4-pipeline-'));
++    maxOutputSize = 1024;
++});
++
++afterEach(async () => {
++    await fs.rm(tempDir, {recursive: true, force: true});
++});
++
++describe('P4 pipeline tool', () => {
++    it('runs fixed and web arguments before its managed output and parent input', async () => {
++        const input = path.join(tempDir, 'input.ll');
++        await fs.writeFile(input, 'input');
++        const tool = makeTool('p4pipe-opt', ['-S']);
++
++        const result = await tool.runChainedTool(compilationInfo, input, ['-passes=instcombine']);
++
++        expect(result.outputFilename).toMatch(/\.opt\.ll$/);
++        expect(tool.calls[0]).toMatchObject({
++            exe: '/toolchain/bin/p4pipe-opt',
++            args: ['-S', '-passes=instcombine', '-o', result.outputFilename, input],
++            options: {customCwd: tempDir, env: {PIPELINE_TEST: '1'}, ldPath: ['/toolchain/lib']},
++        });
++        expect(result.result.stdout.map(line => line.text).join('\n')).toBe('generated output');
++    });
++
++    it('rejects attempts to override its managed output file', async () => {
++        const input = path.join(tempDir, 'input.mlir');
++        const tool = makeTool('p4pipe-mlir-opt');
++
++        const shortOption = await tool.runChainedTool(compilationInfo, input, ['-o', 'other.mlir']);
++        const longOption = await tool.runChainedTool(compilationInfo, input, ['--output=other.mlir']);
++
++        expect(shortOption.result.stderr[0].text).toContain('cannot be overridden');
++        expect(longOption.result.stderr[0].text).toContain('cannot be overridden');
++        expect(tool.calls).toHaveLength(0);
++    });
++
++    it('requires an explicit MIR stopping point', async () => {
++        const input = path.join(tempDir, 'input.ll');
++        const tool = makeTool('p4pipe-mir');
++
++        const missing = await tool.runChainedTool(compilationInfo, input, []);
++        const present = await tool.runChainedTool(compilationInfo, input, ['-stop-after=finalize-isel']);
++
++        expect(missing.result.stderr[0].text).toContain('requires -stop-before=... or -stop-after=...');
++        expect(present.outputFilename).toMatch(/\.mir$/);
++        expect(tool.calls).toHaveLength(1);
++    });
++
++    it('does not expose an output file after execution failure or missing output', async () => {
++        const input = path.join(tempDir, 'input.ll');
++        const failedTool = makeTool('p4pipe-opt');
++        failedTool.code = 1;
++        const missingTool = makeTool('p4pipe-opt');
++        missingTool.produceOutput = false;
++
++        const failed = await failedTool.runChainedTool(compilationInfo, input);
++        const missing = await missingTool.runChainedTool(compilationInfo, input);
++
++        expect(failed.outputFilename).toBeUndefined();
++        expect(failed.result.stderr.map(line => line.text).join('\n')).toContain('tool stderr');
++        expect(missing.outputFilename).toBeUndefined();
++        expect(missing.result.stderr[0].text).toContain('did not produce');
++    });
++
++    it('truncates only panel output and keeps the complete file for the child stage', async () => {
++        const input = path.join(tempDir, 'input.ll');
++        const tool = makeTool('p4pipe-opt');
++        tool.output = '123456789';
++        maxOutputSize = 5;
++
++        const result = await tool.runChainedTool(compilationInfo, input);
++
++        expect(result.result.stdout.map(line => line.text).join('\n')).toContain('12345');
++        expect(result.result.stdout.map(line => line.text).join('\n')).toContain('Output truncated');
++        expect(await fs.readFile(result.outputFilename!, 'utf8')).toBe('123456789');
++    });
++});
