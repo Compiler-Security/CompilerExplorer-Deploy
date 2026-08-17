@@ -147,20 +147,38 @@ CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 
 ## 工具链与配置
 
-默认加载 `c,c++,lean,llvm,llvm_mir,llvm_p4,mlir,p4`：
+默认加载 `c,c++,lean,llvm,llvm_mir,llvm_mir_p4,llvm_p4,mlir,mlir_p4,p4`：
 
 - Clang 包提供 C/C++、LLVM IR 的 `clang`/`opt`/`llc` 和 LLVM MIR 的 `llc`。
+- 标准 MLIR 使用 Clang/LLVM 包中的 `mlir-opt` 与 `mlir-translate`。
 - GCC 包提供 x86_64 与 riscv64 工具链。
 - Lean 更新器安装并验证 `lean` 与 `leanc`。
 - 自研 P4 工具链以 `p4mlir-<short_hash>.tar.gz`（或 `.tar.zst`）发布为 `p4mlir-<short_hash>/` 并切换 `p4-latest` 软链，包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；缺少时对应编译器隐藏。
-- MLIR 编译器 p4mlir-opt、p4mlir-to-json、mlir-translate 来自 `p4-latest`。
-- LLVM IR P4 由 patch 添加，与 LLVM IR 同模式；编译器 P4 opt (latest)、P4 llc (latest) 来自 `p4-latest`。
+- MLIR P4 的 `p4mlir-opt`、`p4mlir-to-json`、`mlir-translate` 来自 `p4-latest`。
+- LLVM IR P4 与 LLVM MIR P4 由 patch 添加，使用 `p4-latest` 中的 P4 fork `opt` 与 `llc`，不修改标准 LLVM IR/MIR 语言。
 - Alive2 只预配置 `/opt/compiler-explorer/alive2-latest/bin/alive-tv`；缺少时菜单隐藏且启动 warning 属于预期。
 - P4 patch 提供语言、图标和语法高亮；编译器 p4c、p4mlir-translate 来自 `p4-latest`。
 
 语言配置集中在 `config/<语言>.local.properties`；全局资源与安全限制位于 `compiler-explorer.local.properties`，nsjail 入口位于 `execution.local.properties`。
 
 C、C++、Lean 4 与 LLVM IR（clang-ir）支持在线执行用户程序，运行由 nsjail 沙箱隔离；riscv64 交叉产物因 VM 内无 qemu-user 仅可编译，其余语言仅编译。源码定制位于 `vm/patches/`，`scripts/apply-ce-patches.sh` 按四位数字前缀依次应用；升级 `CE_REF` 时需确认补丁仍可应用。
+
+### P4 链式流水线
+
+在 P4 语言中选择 `p4mlir-translate` 编译器，然后从编译器面板的 **Add tool** 只添加根工具 `p4mlir-opt`。后续面板从直接父 Tool 的 **Next tools** 菜单依次打开：
+
+```text
+P4 / p4mlir-translate
+└─ p4mlir-opt                         # Web 参数：定制 lowering/pass
+   └─ mlir-translate                  # 固定 --mlir-to-llvmir
+      └─ opt                          # 固定 -S；Web 参数：-passes=...
+         └─ llc -> LLVM MIR           # Web 必填 -stop-before=... 或 -stop-after=...
+            └─ llc -> Assembly        # 固定 -filetype=asm；Web 参数：target/CPU/features
+```
+
+每个 Tool 只读取直接父级生成的完整文件。修改任一父级参数会重新执行并更新全部下游；父级失败或没有生成文件时，下游保持空白。关闭中间面板会级联关闭其全部下游。面板文本超过 `max-asm-size` 时只截断显示，磁盘上的完整文件仍传给下一阶段。
+
+`p4mlir-opt` 默认不添加 pass；如果工具默认行为没有 lower 到 LLVM dialect，需要在它的参数栏填写项目所需 pass。MIR 阶段没有默认截点，未填写 `-stop-before` 或 `-stop-after` 时该面板显示错误，最终 Assembly 阶段不会执行。用户参数不能覆盖各阶段由 CE 管理的 `-o`。
 
 ## Kata 备选路径
 
