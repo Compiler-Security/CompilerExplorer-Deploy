@@ -58,6 +58,8 @@ done
 mv -T "${TOOLCHAIN_PARTIAL}" "${TARGET}"
 TOOLCHAIN_PARTIAL=""
 touch "${TARGET}"
+# 无论 tarball 记录的目录权限如何，确保部署用户以后能清理该版本。
+chmod -R u+rwX "${TARGET}"
 
 if command -v chcon >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" == "Enforcing" ]]; then
   chcon -R -t container_file_t "${TARGET}" || true
@@ -75,5 +77,9 @@ ls -1dt p4mlir-* 2>/dev/null | tail -n +5 | while read -r old; do
     || { echo ">> 跳过非常规项 ${old}"; continue; }
   [[ "$(readlink -f "${LINK_NAME}")" == "$(readlink -f "${old}")" ]] && continue
   echo ">> 清理旧版本 ${old}"
-  rm -rf -- "${old}"
+  # 旧版本可能由其他用户（手动部署）或只读权限的 tarball 产生；
+  # 清理失败不应让已成功切换的发布失败，仅告警并保留。
+  chmod -R u+rwX -- "${old}" 2>/dev/null || true
+  rm -rf -- "${old}" \
+    || echo ">> 警告: 清理 ${old} 失败（属主可能不是部署用户），请用属主或 root 手动删除。" >&2
 done
