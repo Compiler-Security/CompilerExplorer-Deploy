@@ -24,6 +24,7 @@ node_version_supported() {
   || { echo "错误: NODE_SHA256 必须是 64 位十六进制。" >&2; exit 2; }
 NODE_SHA256="${NODE_SHA256,,}"
 CE_HOME=/opt/ce
+CE_STORAGE_DIR=/var/lib/compiler-explorer/storage
 NODE_HOME=/opt/node
 NSJAIL_SRC=/opt/nsjail-src
 CE_UID=10001
@@ -114,6 +115,8 @@ else
   groupadd --system --gid "${CE_GID}" ce
   useradd --system --uid "${CE_UID}" --gid ce --home "${CE_HOME}" ce
 fi
+mountpoint -q "${CE_STORAGE_DIR}" \
+  || { echo "错误: 短链接持久化目录没有挂载: ${CE_STORAGE_DIR}" >&2; exit 1; }
 
 # CE 源码
 if [[ -d "${CE_HOME}/.git" ]]; then
@@ -137,6 +140,17 @@ npm run webpack
 npm run ts-compile
 npm prune --omit=dev
 npm cache clean --force
+
+# 上游 local storage 固定写入 lib/storage/data。把该目录链接到独立的
+# Docker/9p 持久化存储，使 VM overlay 重建时短链接仍然保留。
+LOCAL_STORAGE_DIR="${CE_HOME}/lib/storage/data"
+if [[ -d "${LOCAL_STORAGE_DIR}" && ! -L "${LOCAL_STORAGE_DIR}" ]]; then
+  cp -a --no-clobber "${LOCAL_STORAGE_DIR}/." "${CE_STORAGE_DIR}/"
+fi
+rm -rf -- "${LOCAL_STORAGE_DIR}"
+ln -s -- "${CE_STORAGE_DIR}" "${LOCAL_STORAGE_DIR}"
+chown -R ce:ce "${CE_STORAGE_DIR}"
+chmod 0700 "${CE_STORAGE_DIR}"
 
 # 配置走 9p 软链；服务每次启动还会重新同步，新增语言无需再次装配 VM。
 bash "${REPO_SRC}/vm/sync-ce-config.sh" "${CE_HOME}" "${REPO_SRC}"

@@ -28,6 +28,8 @@ services:
     volumes:
       - vm-disk:/vm/disk
       - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT}:/share/compilers:ro"
+      # 默认使用独立 named volume；设置 CE_STORAGE_ROOT 可改为宿主机绝对路径。
+      - "${CE_STORAGE_ROOT:-ce-storage}:/share/storage"
       # guest 装配只需这三个目录，避免把 .env 与 .git 暴露给 VM。
       - ./config:/share/repo/config:ro
       - ./scripts:/share/repo/scripts:ro
@@ -60,3 +62,5 @@ services:
 
 volumes:
   vm-disk:
+  ce-storage:
+    name: "${CE_STORAGE_VOLUME_NAME:-ce-shortlinks}"

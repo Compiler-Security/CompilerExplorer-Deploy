@@ -17,10 +17,12 @@ write_files:
       ce ALL=(root) NOPASSWD: /usr/bin/systemctl restart ce.service, /usr/bin/systemctl status ce.service, /usr/bin/systemctl is-active ce.service
 
 runcmd:
-  - mkdir -p /opt/compiler-explorer /mnt/ce-repo
+  - mkdir -p /opt/compiler-explorer /mnt/ce-repo /var/lib/compiler-explorer/storage
   - printf 'compilers /opt/compiler-explorer 9p trans=virtio,version=9p2000.L,ro,_netdev,nofail 0 0\n' >> /etc/fstab
   - printf 'cerepo /mnt/ce-repo 9p trans=virtio,version=9p2000.L,ro,_netdev,nofail 0 0\n' >> /etc/fstab
+  - printf 'cestorage /var/lib/compiler-explorer/storage 9p trans=virtio,version=9p2000.L,rw,noexec,nosuid,nodev,_netdev,nofail 0 0\n' >> /etc/fstab
   - systemctl daemon-reload
   - mount -a
+  - mountpoint -q /var/lib/compiler-explorer/storage
 
   - NODE_VERSION="__NODE_VERSION__" NODE_SHA256="__NODE_SHA256__" bash /mnt/ce-repo/vm/provision-ce.sh "__CE_REF__"

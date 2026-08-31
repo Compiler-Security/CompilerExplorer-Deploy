@@ -18,6 +18,7 @@ FORCE_REPROVISION="${FORCE_REPROVISION:-0}"
 NODE_VERSION="${NODE_VERSION:-}"
 NODE_SHA256="${NODE_SHA256:-}"
 COMPILERS_SRC=/share/compilers
+STORAGE_SRC=/share/storage
 REPO_SRC=/share/repo
 FWD_PORT="${FWD_PORT:-10240}"
 SSH_FWD_PORT="${SSH_FWD_PORT:-2223}"
@@ -33,6 +34,15 @@ PROVISION_INPUT_MARKER="${DISK_DIR}/.provision_input"
 REPROVISION_MARKER="${DISK_DIR}/.reprovision_token"
 MON_SOCK="${DISK_DIR}/monitor.sock"
 mkdir -p "${DISK_DIR}"
+
+# mapped-xattr 让 guest 看到 uid/gid 10001，同时底层目录仍归无 capabilities
+# 的 QEMU 进程（uid 0）所有。bind mount 也必须以 root 身份预创建。
+mkdir -p "${STORAGE_SRC}"
+[[ "$(stat -c '%u' "${STORAGE_SRC}")" == "0" ]] \
+  || { echo "错误: 短链接存储目录必须归 uid 0 所有: ${STORAGE_SRC}" >&2; exit 1; }
+chmod 0700 "${STORAGE_SRC}"
+[[ -w "${STORAGE_SRC}" ]] \
+  || { echo "错误: 短链接存储目录不可写: ${STORAGE_SRC}" >&2; exit 1; }
 
 [[ "${CE_REF}" =~ ^gh-[0-9]+$ ]] \
   || { echo "错误: CE_REF 格式应为 gh-<数字>。" >&2; exit 2; }
@@ -211,7 +221,7 @@ rm -rf "${TMPCD}"
 trap - EXIT
 
 echo ">> 启动 VM：${VM_CPUS}C / ${VM_MEM_MB}MB；CE=hostfwd:${FWD_PORT}->10240；SSH=hostfwd:${SSH_FWD_PORT}->22"
-echo ">> 9p 共享: compilers=${COMPILERS_SRC} (ro), cerepo=${REPO_SRC} (ro)"
+echo ">> 9p 共享: compilers=${COMPILERS_SRC} (ro), cerepo=${REPO_SRC} (ro), cestorage=${STORAGE_SRC} (rw)"
 
 shutdown() {
   echo ">> 收到停止信号，向 VM 发 ACPI powerdown（优雅关机）"
@@ -241,6 +251,8 @@ qemu-system-x86_64 \
   -device virtio-9p-pci,fsdev=fscomp,mount_tag=compilers \
   -fsdev local,id=fsrepo,path="${REPO_SRC}",security_model=none,readonly=on,multidevs=remap \
   -device virtio-9p-pci,fsdev=fsrepo,mount_tag=cerepo \
+  -fsdev local,id=fsstorage,path="${STORAGE_SRC}",security_model=mapped-xattr,multidevs=remap \
+  -device virtio-9p-pci,fsdev=fsstorage,mount_tag=cestorage \
   -monitor unix:"${MON_SOCK}",server,nowait \
   -display none -vga none -serial stdio &
 QEMU_PID=$!
