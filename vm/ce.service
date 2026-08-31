@@ -3,8 +3,8 @@ Description=Compiler Explorer
 After=network-online.target ce-cgroups.service
 Wants=network-online.target
 Requires=ce-cgroups.service
-# 编译器与配置都来自 9p 挂载点；挂载不在就不要起 CE（避免起在半空环境）。
-RequiresMountsFor=/opt/compiler-explorer /mnt/ce-repo
+# 编译器、配置和短链接存储都来自 9p 挂载点；挂载不在就不要起 CE。
+RequiresMountsFor=/opt/compiler-explorer /mnt/ce-repo /var/lib/compiler-explorer/storage
 
 [Service]
 Type=simple

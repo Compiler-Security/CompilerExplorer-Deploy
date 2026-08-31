@@ -22,13 +22,13 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=1777
-      - /ce/lib/storage/data:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
       - /ce/out/compiler-cache:rw,noexec,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700
     pids_limit: 2048
 
     volumes:
       # SELinux Enforcing 时给此挂载追加 z。
       - "${CE_COMPILERS_ROOT:?请在 .env 设置 CE_COMPILERS_ROOT（cp .env.example .env 后改实际路径）}:/opt/compiler-explorer:ro"
+      - "${CE_KATA_STORAGE_ROOT:-kata-storage}:/ce/lib/storage/data"
       - ./config/c.local.properties:/ce/etc/config/c.local.properties:ro
       - ./config/c++.local.properties:/ce/etc/config/c++.local.properties:ro
       - ./config/lean.local.properties:/ce/etc/config/lean.local.properties:ro
@@ -43,3 +43,7 @@ services:
 
     mem_limit: 6g
     cpus: 8
+
+volumes:
+  kata-storage:
+    name: "${CE_KATA_STORAGE_VOLUME_NAME:-ce-shortlinks-kata}"

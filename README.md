@@ -5,6 +5,7 @@
 ```text
 nginx → 127.0.0.1:10240 → QEMU/KVM → CE + nsjail
                                       ├─ /opt/compiler-explorer（宿主工具链，只读）
+                                      ├─ /var/lib/compiler-explorer/storage（短链接，持久化）
                                       └─ /mnt/ce-repo（配置与装配脚本，只读）
 ```
 
@@ -31,7 +32,7 @@ curl http://127.0.0.1:10240/api/compilers
 
 ## Docker、系统镜像与 overlay
 
-本部署有四个独立层次，不能把“重建 Docker”和“重建 VM”混为一件事：
+本部署有五个独立层次，不能把“重建 Docker”和“重建 VM”混为一件事：
 
 | 层次 | 内容 | 什么时候需要或会重建 |
 |---|---|---|
@@ -39,8 +40,29 @@ curl http://127.0.0.1:10240/api/compilers
 | Docker 容器 `ce-vm` | 端口、挂载、资源限制和传给入口脚本的环境变量 | `compose.yaml` 或相关 `.env` 参数变化时需要 recreate；recreate 不会删除 named volume |
 | Ubuntu 基础镜像 `base.img` | 未装配 CE 的 Ubuntu 26.04 cloud image | 文件不存在，或 `VM_IMAGE_URL`、`VM_IMAGE_SHA256`、`VM_IMAGE_SHA256_URL` 变化时自动重新下载；来源标记缺失也会重新下载 |
 | CE overlay `ce-vm.qcow2` | Node、nsjail、CE checkout、npm 依赖和构建结果 | 装配指纹变化、上次装配失败、基础镜像缺失或收到新的强制令牌时自动重建 |
+| 短链接存储 `ce-shortlinks` | `storageSolution=local` 生成的短链接内容 | 独立于 overlay；只有显式删除 volume 时才会删除 |
 
-基础镜像和 overlay 都位于 Docker volume `ce-vm_vm-disk`。工具链位于宿主机 `CE_COMPILERS_ROOT`，不属于任何 VM 磁盘，因此重建 overlay 不会重新下载工具链。
+基础镜像和 overlay 都位于 Docker volume `ce-vm_vm-disk`。短链接默认位于独立 Docker volume `ce-shortlinks`，工具链位于宿主机 `CE_COMPILERS_ROOT`；两者都不属于 VM 磁盘，因此重建 overlay 不会删除短链接或重新下载工具链。
+
+### 短链接持久化
+
+CE 的 `local` storage 仍写入上游目录 `lib/storage/data`，但 QEMU guest 中该目录会链接到 `/var/lib/compiler-explorer/storage`。后者通过 9p 映射到独立 Docker volume：
+
+```text
+CE lib/storage/data → guest /var/lib/compiler-explorer/storage
+                    → QEMU /share/storage
+                    → Docker volume ce-shortlinks
+```
+
+如需将内容直接放在可备份的宿主目录，在 `.env` 中设置绝对路径：
+
+```bash
+CE_STORAGE_ROOT=/srv/ce/storage
+```
+
+该目录应专供 CE 使用，并支持扩展属性（xattr）。由于 QEMU 容器丢弃了全部 capabilities，bind mount 应在启动前执行 `sudo install -d -o root -g root -m 0700 /srv/ce/storage`；guest 权限由 9p `mapped-xattr` 映射为 uid/gid `10001`。若不设置，默认使用 named volume；也可用 `CE_STORAGE_VOLUME_NAME` 修改 volume 名称。
+
+首次从旧版本切换时，VM 装配输入变化会重建 overlay。若旧部署中已经有需要保留的短链接，必须在首次重启前将 guest 的 `/opt/ce/lib/storage/data/` 复制到新的 `CE_STORAGE_ROOT`，或导入 `ce-shortlinks` volume。
 
 ### Docker 镜像与容器
 
@@ -66,11 +88,13 @@ docker compose up -d --build --force-recreate qemu
 
 基础镜像不是本地构建的，而是下载并校验的。修改镜像 URL 或校验参数后，需 recreate 容器让新环境变量生效；入口脚本随后自动替换基础镜像，并同时重建依赖它的 overlay。
 
-只有明确需要删除全部 VM 磁盘和基础镜像缓存时才执行：
+只有明确需要删除全部 VM 磁盘、基础镜像缓存和默认短链接 volume 时才执行：
 
 ```bash
 docker compose down -v
 ```
+
+使用 `CE_STORAGE_ROOT` bind mount 时，`down -v` 不会删除宿主目录中的短链接。
 
 ### CE overlay
 
@@ -89,7 +113,7 @@ docker compose down -v
 FORCE_REPROVISION="$(date +%s%N)" docker compose up -d --force-recreate qemu
 ```
 
-以下变化不会重建 overlay：修改 `config/*.local.properties`、更新外部工具链、调整 VM CPU/内存、普通重启或仅 recreate 容器。配置变化只需重启 `ce.service`；工具链更新脚本也只重启 CE。
+以下变化不会重建 overlay：修改 `config/*.local.properties`、更新外部工具链、调整 VM CPU/内存、普通重启、仅 recreate 容器或修改短链接 volume 中的内容。配置变化只需重启 `ce.service`；工具链更新脚本也只重启 CE。
 
 guest 只读取仓库的 `config/`、`scripts/` 和 `vm/`，不会读取 `.env` 或 `.git`。
 
@@ -187,7 +211,7 @@ sudo kata/setup.sh
 docker compose -f compose.kata.yaml up -d --build
 ```
 
-该路径固定使用 `runtime: kata`，不再启用容器内 nsjail；配置或工具链变化后执行 `docker compose -f compose.kata.yaml restart ce`。根文件系统只读，缓存和本地存储位于 tmpfs。
+该路径固定使用 `runtime: kata`，不再启用容器内 nsjail；配置或工具链变化后执行 `docker compose -f compose.kata.yaml restart ce`。根文件系统只读，编译缓存位于 tmpfs，短链接位于独立持久化 volume `ce-shortlinks-kata`。如改用 `CE_KATA_STORAGE_ROOT` bind mount，宿主目录需预先设置为 uid/gid `10001`、权限 `0700`。
 
 ## 排障
 
