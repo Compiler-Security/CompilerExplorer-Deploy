@@ -180,7 +180,7 @@ CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 - GCC 包提供 x86_64 与 riscv64 工具链。
 - Lean 更新器安装并验证 `lean` 与 `leanc`。
 - 自研 P4 工具链以 `p4mlir-<build-number>-<short_hash>.tar.gz`（或 `.tar.zst`）发布为同名版本目录并切换 `p4-latest` 软链，包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；不完整 build 不会注册。
-- CE 启动时扫描全部保留的 P4 build，为 P4、MLIR P4、LLVM P4、LLVM MIR P4 生成 `(latest)` 和 `(<build-id>)` 编译器项；latest 置顶，历史项按 Jenkins 构建号降序。
+- CE 启动时扫描全部保留的 P4 build，为 P4、MLIR P4、LLVM P4、LLVM MIR P4 生成 `(latest)` 和 `(<build-number>)` 编译器项；latest 置顶，历史项按 Jenkins 构建号降序。
 - 历史 `p4mlir-translate` 的 include 路径和后续 `p4mlir-opt`、`mlir-translate`、`opt`、`llc` 流水线均绑定所选 build，不会混用 `p4-latest`。
 - Alive2 只预配置 `/opt/compiler-explorer/alive2-latest/bin/alive-tv`；缺少时菜单隐藏且启动 warning 属于预期。
 - P4 patch 提供语言、图标、语法高亮和同 build 链式流水线。
@@ -191,7 +191,7 @@ C、C++、Lean 4 与 LLVM IR（clang-ir）支持在线执行用户程序，运�
 
 ### P4 链式流水线
 
-在 P4 语言中选择 `p4mlir-translate (latest)` 或任一 `p4mlir-translate (<build-id>)`，然后从编译器面板的 **Add tool** 只添加根工具 `p4mlir-opt`。后续面板从直接父 Tool 的 **Next tools** 菜单依次打开，所有阶段自动使用与所选编译器相同的 build：
+在 P4 语言中选择 `p4mlir-translate (latest)` 或任一 `p4mlir-translate (<build-number>)`，然后从编译器面板的 **Add tool** 只添加根工具 `p4mlir-opt`。后续面板从直接父 Tool 的 **Next tools** 菜单依次打开，所有阶段自动使用与所选编译器相同的 build：
 
 ```text
 P4 / p4mlir-translate
