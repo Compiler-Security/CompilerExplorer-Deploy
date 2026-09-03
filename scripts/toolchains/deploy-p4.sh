@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 # 原子发布 P4 工具链 tarball：解压为 p4mlir-<build_id>/ 并将 p4-latest 软链指向它。
-# 标准 Jenkins build_id 为 <build-number>-<short-hash>。
+# 标准 Jenkins build_id 为 <yyyyMMddHHmm>-<build-number>-<commit>。
 # 用法：deploy-p4.sh <p4mlir-<build_id>.tar.gz|p4mlir-<build_id>.tar.zst>
 set -euo pipefail
 
 # shellcheck source=lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=p4-builds.sh
+source "${TOOLCHAINS_DIR}/p4-builds.sh"
 
 LINK_NAME="p4-latest"
-MAX_BUILDS="${P4_TOOLCHAIN_MAX_BUILDS:-4}"
 ARCHIVE="${1:?用法: deploy-p4.sh <p4mlir-<build_id>.tar.gz|p4mlir-<build_id>.tar.zst>}"
 [[ "$#" -eq 1 ]] || { echo "用法: $0 <p4mlir-<build_id>.tar.gz|p4mlir-<build_id>.tar.zst>" >&2; exit 2; }
 [[ -f "${ARCHIVE}" ]] || { echo "错误: 归档不存在: ${ARCHIVE}" >&2; exit 1; }
-[[ "${MAX_BUILDS}" =~ ^[0-9]+$ ]] \
-  || { echo "错误: P4_TOOLCHAIN_MAX_BUILDS 必须是非负整数: ${MAX_BUILDS}" >&2; exit 2; }
-MAX_BUILDS=$((10#${MAX_BUILDS}))
+p4_load_retention_days "${CE_COMPILERS_ROOT}"
 
 archive_name="$(basename "${ARCHIVE}")"
 [[ "${archive_name}" =~ ^p4mlir-([A-Za-z0-9][A-Za-z0-9._-]{0,127})\.tar\.(gz|zst)$ ]] \
@@ -23,58 +22,49 @@ BUILD_ID="${BASH_REMATCH[1]}"
 ARCHIVE_FORMAT="${BASH_REMATCH[2]}"
 TARGET="${CE_COMPILERS_ROOT}/p4mlir-${BUILD_ID}"
 
-required_exes="bin/p4c bin/p4mlir-opt bin/p4mlir-translate bin/p4mlir-to-json bin/mlir-translate bin/opt bin/llc bin/llvm-objdump bin/llvm-cxxfilt"
-required_files="share/p4c/p4include/core.p4"
+required_exes="${P4_BUILD_REQUIRED_EXES[*]}"
+required_files="${P4_BUILD_REQUIRED_FILES[*]}"
 
-prune_p4_builds() {
-  local max_builds="$1" current_target remaining index record _mtime old old_path
-  local -a records=() ordered_builds=()
-
-  if ((max_builds == 0)); then
-    echo ">> P4 build 自动清理已禁用"
-    return
+persist_p4_retention_days() {
+  local policy_file="${CE_COMPILERS_ROOT}/${P4_RETENTION_POLICY_FILE}"
+  TOOLCHAIN_CONFIG_TEMP="$(mktemp "${policy_file}.tmp.XXXXXX")"
+  printf '%s\n' "${P4_RETENTION_DAYS}" > "${TOOLCHAIN_CONFIG_TEMP}"
+  chmod 0644 "${TOOLCHAIN_CONFIG_TEMP}"
+  mv -Tf -- "${TOOLCHAIN_CONFIG_TEMP}" "${policy_file}"
+  TOOLCHAIN_CONFIG_TEMP=""
+  if command -v chcon >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" == "Enforcing" ]]; then
+    chcon -t container_file_t "${policy_file}" || true
   fi
+}
 
-  shopt -s nullglob
-  for old_path in "${CE_COMPILERS_ROOT}"/p4mlir-*; do
-    [[ -d "${old_path}" && ! -L "${old_path}" ]] || continue
-    records+=("$(find "${old_path}" -maxdepth 0 -printf '%T@')"$'\t'"${old_path##*/}")
-  done
-  shopt -u nullglob
-  if ((${#records[@]} <= max_builds)); then
-    return 0
-  fi
+select_and_prune_p4_builds() {
+  local old_path old
+  p4_select_builds "${CE_COMPILERS_ROOT}"
+  [[ -n "${P4_LATEST_BUILD_PATH}" ]] \
+    || { echo "错误: P4 保留策略没有选出可用 build。" >&2; exit 1; }
 
-  mapfile -t ordered_builds < <(printf '%s\n' "${records[@]}" | sort -t $'\t' -k1,1nr -k2,2r)
-  current_target="$(readlink -f "${CE_COMPILERS_ROOT}/${LINK_NAME}")"
-  remaining="${#ordered_builds[@]}"
+  point_toolchain_link "${LINK_NAME}" "${P4_LATEST_BUILD_PATH}"
+  for old_path in "${P4_REJECTED_BUILD_PATHS[@]}"; do
+    old="${old_path##*/}"
+    [[ "${old}" == p4mlir-* && "${old}" != */* \
+       && "$(dirname "${old_path}")" == "${CE_COMPILERS_ROOT}" \
+       && -d "${old_path}" && ! -L "${old_path}" ]] \
+      || { echo ">> 跳过非常规项 ${old_path}"; continue; }
+    [[ "$(readlink -f "${old_path}")" == "$(readlink -f "${CE_COMPILERS_ROOT}/${LINK_NAME}")" ]] && continue
 
-  for ((index = ${#ordered_builds[@]} - 1; index >= 0 && remaining > max_builds; index--)); do
-    record="${ordered_builds[index]}"
-    IFS=$'\t' read -r _mtime old <<< "${record}"
-    [[ "${old}" == p4mlir-* && "${old}" != */* ]] \
-      || { echo ">> 跳过非常规项 ${old}"; continue; }
-    old_path="${CE_COMPILERS_ROOT}/${old}"
-    [[ -d "${old_path}" && ! -L "${old_path}" ]] || continue
-    [[ "$(readlink -f "${old_path}")" == "${current_target}" ]] && continue
-
-    echo ">> 清理旧版本 ${old}"
+    echo ">> 清理未保留版本 ${old}"
     # 旧版本可能由其他用户（手动部署）或只读权限的 tarball 产生；
     # 清理失败不应让已成功切换的发布失败，仅告警并保留。
     chmod -R u+rwX -- "${old_path}" 2>/dev/null || true
-    if rm -rf -- "${old_path}"; then
-      remaining=$((remaining - 1))
-    else
+    if ! rm -rf -- "${old_path}"; then
       echo ">> 警告: 清理 ${old} 失败（属主可能不是部署用户），请用属主或 root 手动删除。" >&2
     fi
   done
 
-  if ((remaining > max_builds)); then
-    echo ">> 警告: 当前仍有 ${remaining} 个 P4 build，超过配置上限 ${max_builds}。" >&2
-  fi
+  echo ">> P4 保留策略：${P4_RETENTION_DAYS} 天，选中 ${#P4_SELECTED_BUILD_PATHS[@]} 个 build"
 }
 
-require_commands tar find sort
+require_commands date find readlink sort tar
 [[ "${ARCHIVE_FORMAT}" == "gz" ]] || require_commands zstd
 lock_toolchains
 
@@ -118,8 +108,8 @@ if command -v chcon >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" ==
   chcon -R -t container_file_t "${TARGET}" || true
 fi
 
-point_toolchain_link "${LINK_NAME}" "${TARGET}"
+persist_p4_retention_days
+select_and_prune_p4_builds
 "${CE_COMPILERS_ROOT}/${LINK_NAME}/bin/p4c" --version | head -1 || true
 DID_CHANGE=1
-prune_p4_builds "${MAX_BUILDS}"
 finish_toolchain_update "P4 工具链"
