@@ -169,6 +169,12 @@ bash "${REPO_ROOT}/vm/sync-ce-config.sh" \
   "${ce_home}" "${REPO_ROOT}" "${selection_root}" >"${sync_log}" 2>&1
 
 p4_config="${ce_home}/etc/config/p4.local.properties"
+assert_contains \
+  "compiler.p4mlir-translate.options=-I${selection_root}/p4-latest/share/p4c/p4include" \
+  "${p4_config}"
+grep -Fq \
+  "options=-I${selection_root}/p4mlir-202609011800-101-b1b1b1b1/share/p4c/p4include" \
+  "${p4_config}" || fail '历史 translate 缺少 -I include 参数'
 actual_translate_names="$(
   sed -n 's/^compiler\..*\.name=\(p4mlir-translate (.*)\)$/\1/p' "${p4_config}"
 )"
