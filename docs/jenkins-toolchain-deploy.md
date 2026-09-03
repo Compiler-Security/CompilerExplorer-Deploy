@@ -138,7 +138,7 @@ pipeline {
         DEPLOY_HOST    = 'ce-deploy@poweredger770'
         DEPLOY_REPO    = '/srv/ce/repo'
         TOOLCHAIN_ROOT = '/srv/ce/compilers'
-        P4_MAX_BUILDS  = '4'                   // 包含当前 build；0 = 不自动清理
+        P4_RETENTION_DAYS = '7'                // 日期窗口和真实 build 上限；0 = 不限
         INCOMING_ROOT  = '/srv/ce/incoming'
         VM_SSH_PORT    = '2223'
         SSH_OPTS       = '-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
@@ -171,10 +171,12 @@ pipeline {
             steps {
                 sh '''
                     set -eu
+                    BUILD_TIMESTAMP="$(date +%Y%m%d%H%M)"
                     SHORT_COMMIT="$(git rev-parse --short=12 HEAD)"
-                    PKG="p4mlir-${BUILD_NUMBER}-${SHORT_COMMIT}.tar.gz"
+                    PKG="p4mlir-${BUILD_TIMESTAMP}-${BUILD_NUMBER}-${SHORT_COMMIT}.tar.zst"
                     echo "${PKG}" > "${WORKSPACE}/.toolchain-pkg"
-                    tar -czf "${WORKSPACE}/${PKG}" -C "${INSTALL_DIR}" .
+                    tar -cf - -C "${INSTALL_DIR}" . \
+                      | zstd -T0 -q -o "${WORKSPACE}/${PKG}"
                 '''
             }
         }
@@ -201,7 +203,7 @@ pipeline {
                         PKG="$(cat "${WORKSPACE}/.toolchain-pkg")"
                         ssh ${SSH_OPTS} "${DEPLOY_HOST}" \
                             "CE_COMPILERS_ROOT='${TOOLCHAIN_ROOT}' \
-                             P4_TOOLCHAIN_MAX_BUILDS='${P4_MAX_BUILDS}' CE_DEFER_RESTART=1 \
+                             P4_TOOLCHAIN_RETENTION_DAYS='${P4_RETENTION_DAYS}' CE_DEFER_RESTART=1 \
                              '${DEPLOY_REPO}/scripts/toolchains/deploy-p4.sh' \
                              '${INCOMING_ROOT}/${PKG}'"
                     '''
@@ -257,11 +259,11 @@ pipeline {
 要点：
 
 - `CE_DEFER_RESTART=1` 让发布脚本只切换软链，由 `Restart CE` 阶段统一重启 VM 内的 `ce.service`。
-- `P4_TOOLCHAIN_MAX_BUILDS` 默认值为 `4`，统计当前 build 在内；设为 `0` 时永久保留。清理在 CE 重启前完成，启动生成器会把磁盘上全部有效 build 注册到四种 P4 语言菜单。
-- 标准包名中的 `${BUILD_NUMBER}-${SHORT_COMMIT}` 仍用于唯一标识目录；菜单只显示 `${BUILD_NUMBER}`，latest 置顶，其余按构建号降序。
+- `P4_TOOLCHAIN_RETENTION_DAYS` 默认为 `7`，同时表示日期窗口和真实 build 上限；`p4-latest` 不计数。dated build 每天只保留最新一个，legacy build 填补剩余名额；设为 `0` 时不限窗口和总数，但仍每日去重。
+- 标准包名中的 `${BUILD_TIMESTAMP}-${BUILD_NUMBER}-${SHORT_COMMIT}` 用于唯一标识和每日选择。菜单对 dated build 显示 `YYYY-MM-DD`，对旧格式显示 build number；生产端应始终使用一致时区生成时间戳。
 - `post.always` 清理部署机上的临时 tarball；`deploy-p4.sh` 已把内容解压进 `compilers`，删除 tarball 不影响已发布版本。
 - `StrictHostKeyChecking=accept-new` 适合首次接入，稳定后建议在 agent 上预置 `known_hosts` 并固定指纹。
-- 发布其他工具链时复制相应 `deploy-*.sh` 的模式；`deploy-p4.sh` 接收 `p4mlir-<build_id>.tar.gz` 或 `.tar.zst`（标准 ID 为 `<build-number>-<short-hash>`，zst 需要部署机有 `zstd`），要求归档含 `bin/p4c`、`bin/p4mlir-opt`、`bin/p4mlir-translate`、`bin/p4mlir-to-json`、`bin/mlir-translate` 及 `bin/opt`/`bin/llc`/`bin/llvm-objdump`/`bin/llvm-cxxfilt`。
+- 发布其他工具链时复制相应 `deploy-*.sh` 的模式；`deploy-p4.sh` 接收新格式 `p4mlir-<yyyyMMddHHmm>-<buildNumber>-<commit>.tar.zst`，并兼容旧格式 `.tar.gz|zst`。构建机和部署机处理 zst 时都需要 `zstd`；归档必须包含 `bin/p4c`、`bin/p4mlir-opt`、`bin/p4mlir-translate`、`bin/p4mlir-to-json`、`bin/mlir-translate` 及 `bin/opt`/`bin/llc`/`bin/llvm-objdump`/`bin/llvm-cxxfilt`。
 
 ## 验证
 
