@@ -4,6 +4,7 @@ set -euo pipefail
 
 CE_HOME="${1:-/opt/ce}"
 REPO_SRC="${2:-/mnt/ce-repo}"
+COMPILERS_ROOT="${3:-/opt/compiler-explorer}"
 CONFIG_SRC="${REPO_SRC}/config"
 CONFIG_DST="${CE_HOME}/etc/config"
 
@@ -33,4 +34,7 @@ for source_path in "${config_files[@]}"; do
   ln -sfn -- "${source_path}" "${CONFIG_DST}/${filename}"
 done
 
-echo ">> 已同步 ${#config_files[@]} 个 CE local properties"
+bash "${REPO_SRC}/scripts/toolchains/generate-p4-config.sh" \
+  "${COMPILERS_ROOT}" "${CONFIG_SRC}" "${CONFIG_DST}"
+
+echo ">> 已同步 ${#config_files[@]} 个静态 CE local properties 和 4 个动态 P4 配置"

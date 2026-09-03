@@ -1,0 +1,8 @@
+# LLVM MIR P4：P4 fork llc 条目由 generate-p4-config.sh 动态追加。
+
+compilers=@COMPILERS@
+defaultCompiler=@DEFAULT_COMPILER@
+supportsExecute=false
+
+objdumper=@P4_TOOLCHAIN_ROOT@/bin/llvm-objdump
+demangler=@P4_TOOLCHAIN_ROOT@/bin/llvm-cxxfilt
