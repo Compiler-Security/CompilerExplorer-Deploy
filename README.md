@@ -113,7 +113,7 @@ docker compose down -v
 FORCE_REPROVISION="$(date +%s%N)" docker compose up -d --force-recreate qemu
 ```
 
-以下变化不会重建 overlay：修改 `config/*.local.properties`、更新外部工具链、调整 VM CPU/内存、普通重启、仅 recreate 容器或修改短链接 volume 中的内容。配置变化只需重启 `ce.service`；工具链更新脚本也只重启 CE。
+以下变化不会重建 overlay：修改 `config/*.local.properties` 或 P4 的 `*.local.properties.template`、更新外部工具链、调整 VM CPU/内存、普通重启、仅 recreate 容器或修改短链接 volume 中的内容。配置变化只需重启 `ce.service`；工具链更新脚本也只重启 CE。
 
 guest 只读取仓库的 `config/`、`scripts/` 和 `vm/`，不会读取 `.env` 或 `.git`。
 
@@ -123,7 +123,7 @@ guest 只读取仓库的 `config/`、`scripts/` 和 `vm/`，不会读取 `.env` 
 |---|---|---|
 | README 或其它纯文档 | 无 | 无 |
 | `nginx/ce.conf` | 检查配置并 reload nginx | 无 |
-| `config/*.local.properties` | 重启 `ce.service` | 仅 CE 进程，不重建 Docker 或磁盘 |
+| `config/*.local.properties` 或 P4 配置模板 | 重启 `ce.service` | 仅 CE 进程，不重建 Docker 或磁盘 |
 | `CE_COMPILERS_ROOT` 中的工具链内容或 `*-latest` 软链 | 重启 `ce.service`；工具链更新脚本会自动处理 | 仅 CE 进程 |
 | `vm/sync-ce-config.sh` | 重启 `ce.service` | 仅 CE 进程 |
 | `vm/entrypoint.sh` | `docker compose restart qemu` | 重启容器和 guest；是否重建 overlay 由新入口逻辑判断 |
@@ -150,10 +150,12 @@ ssh -i "$CE_VM_SSH_KEY" -p "${CE_VM_SSH_PORT:-2223}" \
 | Clang/LLVM | `scripts/toolchains/update-clang.sh` |
 | GCC | `scripts/toolchains/update-gcc.sh [x86_64\|riscv64\|all]` |
 | Lean 4 | `scripts/toolchains/update-lean4.sh [版本号\|latest]` |
-| 自研 P4 工具链 | `scripts/toolchains/deploy-p4.sh <p4mlir-short_hash.tar.gz\|tar.zst>` |
+| 自研 P4 工具链 | `scripts/toolchains/deploy-p4.sh <p4mlir-build_id.tar.gz\|tar.zst>` |
 | CE 本体 | `scripts/update-ce.sh gh-<release>` |
 
 工具链使用版本目录和相对 `*-latest` 软链。更新器会从真实二进制读取版本并同步 CE 配置，因此版本升级产生配置 Git diff 是预期行为。统一入口在全部更新后只重启一次 CE。
+
+P4 工具链默认最多保留 4 个 build（当前 + 3 个历史版本）。可在 `.env` 或 Jenkins 部署环境中设置 `P4_TOOLCHAIN_MAX_BUILDS=<数量>`；该数量包含当前 build，设为 `0` 时不自动清理。
 
 Jenkins 与部署机分离时，自研工具链的 CI 自动发布流程（最小权限用户、密钥模型、Jenkinsfile）见 [docs/jenkins-toolchain-deploy.md](docs/jenkins-toolchain-deploy.md)。
 
@@ -177,19 +179,19 @@ CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 - 标准 MLIR 使用 Clang/LLVM 包中的 `mlir-opt` 与 `mlir-translate`。
 - GCC 包提供 x86_64 与 riscv64 工具链。
 - Lean 更新器安装并验证 `lean` 与 `leanc`。
-- 自研 P4 工具链以 `p4mlir-<short_hash>.tar.gz`（或 `.tar.zst`）发布为 `p4mlir-<short_hash>/` 并切换 `p4-latest` 软链，包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；缺少时对应编译器隐藏。
-- MLIR P4 的 `p4mlir-opt`、`p4mlir-to-json`、`mlir-translate` 来自 `p4-latest`。
-- LLVM IR P4 与 LLVM MIR P4 由 patch 添加，使用 `p4-latest` 中的 P4 fork `opt` 与 `llc`，不修改标准 LLVM IR/MIR 语言。
+- 自研 P4 工具链以 `p4mlir-<build-number>-<short_hash>.tar.gz`（或 `.tar.zst`）发布为同名版本目录并切换 `p4-latest` 软链，包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；不完整 build 不会注册。
+- CE 启动时扫描全部保留的 P4 build，为 P4、MLIR P4、LLVM P4、LLVM MIR P4 生成 `(latest)` 和 `(<hash>)` 编译器项；latest 置顶，历史项按 Jenkins 构建号降序。
+- 历史 `p4mlir-translate` 的 include 路径和后续 `p4mlir-opt`、`mlir-translate`、`opt`、`llc` 流水线均绑定所选 build，不会混用 `p4-latest`。
 - Alive2 只预配置 `/opt/compiler-explorer/alive2-latest/bin/alive-tv`；缺少时菜单隐藏且启动 warning 属于预期。
-- P4 patch 提供语言、图标和语法高亮；编译器 p4c、p4mlir-translate 来自 `p4-latest`。
+- P4 patch 提供语言、图标、语法高亮和同 build 链式流水线。
 
-语言配置集中在 `config/<语言>.local.properties`；全局资源与安全限制位于 `compiler-explorer.local.properties`，nsjail 入口位于 `execution.local.properties`。
+普通语言配置集中在 `config/<语言>.local.properties`；四种 P4 语言使用同目录下的 `.local.properties.template`，由 `generate-p4-config.sh` 在 CE 启动前生成最终配置。全局资源与安全限制位于 `compiler-explorer.local.properties`，nsjail 入口位于 `execution.local.properties`。
 
 C、C++、Lean 4 与 LLVM IR（clang-ir）支持在线执行用户程序，运行由 nsjail 沙箱隔离；riscv64 交叉产物因 VM 内无 qemu-user 仅可编译，其余语言仅编译。源码定制位于 `vm/patches/`，`scripts/apply-ce-patches.sh` 按四位数字前缀依次应用；升级 `CE_REF` 时需确认补丁仍可应用。
 
 ### P4 链式流水线
 
-在 P4 语言中选择 `p4mlir-translate` 编译器，然后从编译器面板的 **Add tool** 只添加根工具 `p4mlir-opt`。后续面板从直接父 Tool 的 **Next tools** 菜单依次打开：
+在 P4 语言中选择 `p4mlir-translate (latest)` 或任一 `p4mlir-translate (<hash>)`，然后从编译器面板的 **Add tool** 只添加根工具 `p4mlir-opt`。后续面板从直接父 Tool 的 **Next tools** 菜单依次打开，所有阶段自动使用与所选编译器相同的 build：
 
 ```text
 P4 / p4mlir-translate
@@ -203,6 +205,8 @@ P4 / p4mlir-translate
 每个 Tool 只读取直接父级生成的完整文件。修改任一父级参数会重新执行并更新全部下游；父级失败或没有生成文件时，下游保持空白。关闭中间面板会级联关闭其全部下游。面板文本超过 `max-asm-size` 时只截断显示，磁盘上的完整文件仍传给下一阶段。
 
 `p4mlir-opt` 默认不添加 pass；如果工具默认行为没有 lower 到 LLVM dialect，需要在它的参数栏填写项目所需 pass。MIR 阶段没有默认截点，未填写 `-stop-before` 或 `-stop-after` 时该面板显示错误，最终 Assembly 阶段不会执行。用户参数不能覆盖各阶段由 CE 管理的 `-o`。
+
+部署脚本、保留策略和动态配置生成可用 `bash tests/test-p4-toolchains.sh` 做本地回归测试。
 
 ## Kata 备选路径
 
@@ -220,8 +224,8 @@ docker compose -f compose.kata.yaml up -d --build
 - 装配日志：`docker compose logs -f qemu`。
 - CE 服务：VM 内执行 `journalctl -u ce -e`。
 - 工具链在 QEMU 容器内是 `/share/compilers`，在 guest 内是 `/opt/compiler-explorer`。
-- 编译器未出现：检查对应相对 `*-latest` 软链和必要二进制，再重启 `ce.service`。
-- 配置未生效：检查 `/opt/ce/etc/config/*.local.properties` 是否指向 `/mnt/ce-repo/config/`。
+- 编译器未出现：检查对应相对 `*-latest` 软链和必要二进制，再重启 `ce.service`；不完整的 P4 build 会在日志中显示“跳过不完整”。
+- 配置未生效：普通配置应链接到 `/mnt/ce-repo/config/`；四个 P4 配置应是 `/opt/ce/etc/config/` 中动态生成的普通文件。
 - nsjail 失败：检查 `ce-cgroups.service`，并确认 `/sys/fs/cgroup/ce-{compile,sandbox}` 与 `/cefs` 存在；装配自检会输出详细 errno。
 - SELinux Enforcing 阻止读取：按 Compose 注释给只读 bind mount 添加 `z` 标签。
 

@@ -138,6 +138,7 @@ pipeline {
         DEPLOY_HOST    = 'ce-deploy@poweredger770'
         DEPLOY_REPO    = '/srv/ce/repo'
         TOOLCHAIN_ROOT = '/srv/ce/compilers'
+        P4_MAX_BUILDS  = '4'                   // 包含当前 build；0 = 不自动清理
         INCOMING_ROOT  = '/srv/ce/incoming'
         VM_SSH_PORT    = '2223'
         SSH_OPTS       = '-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
@@ -199,7 +200,8 @@ pipeline {
                         set -eu
                         PKG="$(cat "${WORKSPACE}/.toolchain-pkg")"
                         ssh ${SSH_OPTS} "${DEPLOY_HOST}" \
-                            "CE_COMPILERS_ROOT='${TOOLCHAIN_ROOT}' CE_DEFER_RESTART=1 \
+                            "CE_COMPILERS_ROOT='${TOOLCHAIN_ROOT}' \
+                             P4_TOOLCHAIN_MAX_BUILDS='${P4_MAX_BUILDS}' CE_DEFER_RESTART=1 \
                              '${DEPLOY_REPO}/scripts/toolchains/deploy-p4.sh' \
                              '${INCOMING_ROOT}/${PKG}'"
                     '''
@@ -255,9 +257,11 @@ pipeline {
 要点：
 
 - `CE_DEFER_RESTART=1` 让发布脚本只切换软链，由 `Restart CE` 阶段统一重启 VM 内的 `ce.service`。
+- `P4_TOOLCHAIN_MAX_BUILDS` 默认值为 `4`，统计当前 build 在内；设为 `0` 时永久保留。清理在 CE 重启前完成，启动生成器会把磁盘上全部有效 build 注册到四种 P4 语言菜单。
+- 标准包名中的 `${BUILD_NUMBER}-${SHORT_COMMIT}` 用于排序和显示：菜单显示 commit hash，latest 置顶，其余按 Jenkins 构建号降序。
 - `post.always` 清理部署机上的临时 tarball；`deploy-p4.sh` 已把内容解压进 `compilers`，删除 tarball 不影响已发布版本。
 - `StrictHostKeyChecking=accept-new` 适合首次接入，稳定后建议在 agent 上预置 `known_hosts` 并固定指纹。
-- 发布其他工具链时复制相应 `deploy-*.sh` 的模式；`deploy-p4.sh` 接收 `p4mlir-<short_hash>.tar.gz` 或 `.tar.zst`（zst 需要部署机有 `zstd`），要求归档含 `bin/p4c`、`bin/p4mlir-opt`、`bin/p4mlir-translate`、`bin/p4mlir-to-json`、`bin/mlir-translate` 及 `bin/opt`/`bin/llc`/`bin/llvm-objdump`/`bin/llvm-cxxfilt`。
+- 发布其他工具链时复制相应 `deploy-*.sh` 的模式；`deploy-p4.sh` 接收 `p4mlir-<build_id>.tar.gz` 或 `.tar.zst`（标准 ID 为 `<build-number>-<short-hash>`，zst 需要部署机有 `zstd`），要求归档含 `bin/p4c`、`bin/p4mlir-opt`、`bin/p4mlir-translate`、`bin/p4mlir-to-json`、`bin/mlir-translate` 及 `bin/opt`/`bin/llc`/`bin/llvm-objdump`/`bin/llvm-cxxfilt`。
 
 ## 验证
 
