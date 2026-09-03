@@ -106,10 +106,10 @@ actual_translate_names="$(
 )"
 expected_translate_names="$(printf '%s\n' \
   'p4mlir-translate (latest)' \
-  'p4mlir-translate (b8b8b8b8)' \
-  'p4mlir-translate (a7a7a7a7)' \
-  'p4mlir-translate (f6f6f6f6)' \
-  'p4mlir-translate (e5e5e5e5)')"
+  'p4mlir-translate (108-b8b8b8b8)' \
+  'p4mlir-translate (107-a7a7a7a7)' \
+  'p4mlir-translate (106-f6f6f6f6)' \
+  'p4mlir-translate (105-e5e5e5e5)')"
 assert_eq "${expected_translate_names}" "${actual_translate_names}" 'translate 菜单顺序'
 
 grep -Fq "options=${compiler_root}/p4mlir-107-a7a7a7a7/share/p4c/p4include" "${p4_config}" \
@@ -119,7 +119,7 @@ for language in p4 mlir_p4 llvm_p4 llvm_mir_p4; do
   generated="${ce_home}/etc/config/${language}.local.properties"
   [[ -f "${generated}" && ! -L "${generated}" ]] || fail "${language} 配置未生成"
   grep -Fq '(latest)' "${generated}" || fail "${language} 缺少 latest 项"
-  grep -Fq '(b8b8b8b8)' "${generated}" || fail "${language} 缺少历史 hash 项"
+  grep -Fq '(108-b8b8b8b8)' "${generated}" || fail "${language} 缺少历史 build ID 项"
   grep -Fq 'semver=1.0.0' "${generated}" || fail "${language} 缺少 latest 排序元数据"
   grep -Fq '@' "${generated}" && fail "${language} 仍含未替换模板变量"
 done
