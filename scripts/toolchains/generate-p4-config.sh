@@ -83,15 +83,17 @@ compiler_list() {
   printf '%s' "${result}"
 }
 
-emit_compiler_versions() { # <latest-id> <history-prefix> <executable> <display-base> [options-suffix]
-  local latest_id="$1" history_prefix="$2" executable="$3" display_base="$4" options_suffix="${5:-}"
+emit_compiler_versions() { # <latest-id> <history-prefix> <executable> <display-base> [options-prefix] [options-suffix]
+  local latest_id="$1" history_prefix="$2" executable="$3" display_base="$4"
+  local options_prefix="${5:-}" options_suffix="${6:-}"
   local index id rank
   if ((latest_valid)); then
     printf '\ncompiler.%s.exe=%s/bin/%s\n' "${latest_id}" "${latest_root}" "${executable}"
     printf 'compiler.%s.name=%s (latest)\n' "${latest_id}" "${display_base}"
     printf 'compiler.%s.semver=1.0.0\n' "${latest_id}"
-    if [[ -n "${options_suffix}" ]]; then
-      printf 'compiler.%s.options=%s%s\n' "${latest_id}" "${latest_root}" "${options_suffix}"
+    if [[ -n "${options_prefix}${options_suffix}" ]]; then
+      printf 'compiler.%s.options=%s%s%s\n' \
+        "${latest_id}" "${options_prefix}" "${latest_root}" "${options_suffix}"
     fi
   fi
 
@@ -101,8 +103,9 @@ emit_compiler_versions() { # <latest-id> <history-prefix> <executable> <display-
     printf '\ncompiler.%s.exe=%s/bin/%s\n' "${id}" "${history_paths[index]}" "${executable}"
     printf 'compiler.%s.name=%s (%s)\n' "${id}" "${display_base}" "${history_labels[index]}"
     printf 'compiler.%s.semver=0.%d.0\n' "${id}" "${rank}"
-    if [[ -n "${options_suffix}" ]]; then
-      printf 'compiler.%s.options=%s%s\n' "${id}" "${history_paths[index]}" "${options_suffix}"
+    if [[ -n "${options_prefix}${options_suffix}" ]]; then
+      printf 'compiler.%s.options=%s%s%s\n' \
+        "${id}" "${options_prefix}" "${history_paths[index]}" "${options_suffix}"
     fi
   done
 }
@@ -121,7 +124,7 @@ emit_p4_config() {
   emit_compiler_versions p4c p4c p4c p4c
   emit_compiler_versions \
     p4mlir-translate p4mlir-translate p4mlir-translate p4mlir-translate \
-    '/share/p4c/p4include'
+    '-I' '/share/p4c/p4include'
 }
 
 emit_mlir_p4_config() {
