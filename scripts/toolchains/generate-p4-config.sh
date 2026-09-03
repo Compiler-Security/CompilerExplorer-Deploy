@@ -69,8 +69,8 @@ for candidate in "${COMPILERS_ROOT}"/p4mlir-*; do
   build_id="${candidate##*/p4mlir-}"
   mtime="$(find "${candidate}" -maxdepth 0 -printf '%T@')"
   if [[ "${build_id}" =~ ^([0-9]+)-([[:xdigit:]]{7,64})$ ]]; then
-    # 标准 Jenkins build：标准项优先，按构建号降序；菜单显示完整 build ID。
-    history_records+=("0"$'\t'"${BASH_REMATCH[1]}"$'\t'"${mtime}"$'\t'"${build_id}"$'\t'"${build_id}"$'\t'"${candidate}")
+    # 标准 Jenkins build：标准项优先，按构建号降序；菜单只显示构建号。
+    history_records+=("0"$'\t'"${BASH_REMATCH[1]}"$'\t'"${mtime}"$'\t'"${build_id}"$'\t'"${BASH_REMATCH[1]}"$'\t'"${candidate}")
   else
     # 旧格式没有可靠的构建号，保留完整 ID 并按部署时间降序。
     history_records+=("1"$'\t'"0"$'\t'"${mtime}"$'\t'"${build_id}"$'\t'"${build_id}"$'\t'"${candidate}")
