@@ -150,12 +150,12 @@ ssh -i "$CE_VM_SSH_KEY" -p "${CE_VM_SSH_PORT:-2223}" \
 | Clang/LLVM | `scripts/toolchains/update-clang.sh` |
 | GCC | `scripts/toolchains/update-gcc.sh [x86_64\|riscv64\|all]` |
 | Lean 4 | `scripts/toolchains/update-lean4.sh [版本号\|latest]` |
-| 自研 P4 工具链 | `scripts/toolchains/deploy-p4.sh <p4mlir-build_id.tar.gz\|tar.zst>` |
+| 自研 P4 工具链 | `scripts/toolchains/deploy-p4.sh <p4mlir-yyyyMMddHHmm-buildNumber-commit.tar.zst>` |
 | CE 本体 | `scripts/update-ce.sh gh-<release>` |
 
 工具链使用版本目录和相对 `*-latest` 软链。更新器会从真实二进制读取版本并同步 CE 配置，因此版本升级产生配置 Git diff 是预期行为。统一入口在全部更新后只重启一次 CE。
 
-P4 工具链默认最多保留 4 个 build（当前 + 3 个历史版本）。可在 `.env` 或 Jenkins 部署环境中设置 `P4_TOOLCHAIN_MAX_BUILDS=<数量>`；该数量包含当前 build，设为 `0` 时不自动清理。
+P4 工具链默认使用 `P4_TOOLCHAIN_RETENTION_DAYS=7`：每个自然日只保留时间戳最新的 build，保留最新构建日期起 7 天内的 dated build，再用旧格式 build 填满最多 7 个真实目录。`p4-latest` 只是别名，不计入数量；设为 `0` 时不限日期和总数，但仍执行每日去重。部署脚本会将实际策略写入工具链根的 `.p4-retention-days`，供 VM 内的配置生成器读取。
 
 Jenkins 与部署机分离时，自研工具链的 CI 自动发布流程（最小权限用户、密钥模型、Jenkinsfile）见 [docs/jenkins-toolchain-deploy.md](docs/jenkins-toolchain-deploy.md)。
 
@@ -179,8 +179,8 @@ CE_VM_SSH_PUBKEY=/path/to/ce_vm_key.pub
 - 标准 MLIR 使用 Clang/LLVM 包中的 `mlir-opt` 与 `mlir-translate`。
 - GCC 包提供 x86_64 与 riscv64 工具链。
 - Lean 更新器安装并验证 `lean` 与 `leanc`。
-- 自研 P4 工具链以 `p4mlir-<build-number>-<short_hash>.tar.gz`（或 `.tar.zst`）发布为同名版本目录并切换 `p4-latest` 软链，包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；不完整 build 不会注册。
-- CE 启动时扫描全部保留的 P4 build，为 P4、MLIR P4、LLVM P4、LLVM MIR P4 生成 `(latest)` 和 `(<build-number>)` 编译器项；latest 置顶，历史项按 Jenkins 构建号降序。
+- 新版 P4 工具链以 `p4mlir-<yyyyMMddHHmm>-<buildNumber>-<commit>.tar.zst` 发布为同名版本目录；旧的 `<buildNumber>-<commit>.tar.gz|zst` 仍兼容。工具链包含 p4c、p4mlir 系列工具与 P4 修改版 LLVM；不完整 build 不会注册。
+- CE 启动时按同一保留策略扫描 P4 build，为 P4、MLIR P4、LLVM P4、LLVM MIR P4 生成编译器项：dated build 显示 `(YYYY-MM-DD)`，旧格式显示 `(<build-number>)`，并保持 `(latest)` 置顶。
 - 历史 `p4mlir-translate` 的 include 路径和后续 `p4mlir-opt`、`mlir-translate`、`opt`、`llc` 流水线均绑定所选 build，不会混用 `p4-latest`。
 - Alive2 只预配置 `/opt/compiler-explorer/alive2-latest/bin/alive-tv`；缺少时菜单隐藏且启动 warning 属于预期。
 - P4 patch 提供语言、图标、语法高亮和同 build 链式流水线。
@@ -191,7 +191,7 @@ C、C++、Lean 4 与 LLVM IR（clang-ir）支持在线执行用户程序，运�
 
 ### P4 链式流水线
 
-在 P4 语言中选择 `p4mlir-translate (latest)` 或任一 `p4mlir-translate (<build-number>)`，然后从编译器面板的 **Add tool** 只添加根工具 `p4mlir-opt`。后续面板从直接父 Tool 的 **Next tools** 菜单依次打开，所有阶段自动使用与所选编译器相同的 build：
+在 P4 语言中选择 `p4mlir-translate (latest)`、任一 dated 项如 `p4mlir-translate (2026-09-03)`，或旧格式项如 `p4mlir-translate (108)`，然后从编译器面板的 **Add tool** 只添加根工具 `p4mlir-opt`。后续面板从直接父 Tool 的 **Next tools** 菜单依次打开，所有阶段自动使用与所选编译器相同的 build：
 
 ```text
 P4 / p4mlir-translate
