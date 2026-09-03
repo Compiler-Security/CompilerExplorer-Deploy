@@ -1,0 +1,8 @@
+# MLIR P4：编译器条目由 generate-p4-config.sh 根据已安装的 P4 build 动态追加。
+
+compilers=@COMPILERS@
+defaultCompiler=@DEFAULT_COMPILER@
+compilerType=mlir
+supportsBinary=false
+supportsExecute=false
+supportsAsmDocs=false

@@ -1,8 +1,8 @@
-# P4：p4c 与 p4mlir-translate，路径走稳定软链 p4-latest。
+# P4：编译器条目由 generate-p4-config.sh 根据已安装的 P4 build 动态追加。
 # 复用 CE 的 MLIR compilerType：以 <exe> [选项] -o <输出> <输入> 方式调用并展示原始文本输出。
 
-compilers=&p4c:&p4mlirtranslate
-defaultCompiler=p4c
+compilers=@COMPILERS@
+defaultCompiler=@DEFAULT_COMPILER@
 compilerType=mlir
 supportsBinary=false
 supportsExecute=false
@@ -10,23 +10,24 @@ supportsAsmDocs=false
 
 # P4 -> MLIR P4 -> LLVM IR P4 -> LLVM MIR P4 -> assembly.
 # 只有根工具出现在编译器的 Add tool 菜单；后续阶段从父 Tool 的 Next tools 菜单打开。
+# exe 只用于 CE 启动时检查工具是否存在；运行时会绑定所选编译器所在的 build。
 tools=p4pipe-mlir-opt:p4pipe-mlir-translate:p4pipe-opt:p4pipe-mir:p4pipe-llc
 
 tools.p4pipe-mlir-opt.name=p4mlir-opt
-tools.p4pipe-mlir-opt.exe=/opt/compiler-explorer/p4-latest/bin/p4mlir-opt
+tools.p4pipe-mlir-opt.exe=@P4_TOOLCHAIN_ROOT@/bin/p4mlir-opt
 tools.p4pipe-mlir-opt.type=postcompilation
 tools.p4pipe-mlir-opt.class=p4-pipeline-tool
-tools.p4pipe-mlir-opt.exclude=p4c$
+tools.p4pipe-mlir-opt.exclude=p4c
 tools.p4pipe-mlir-opt.languageId=mlir_p4
 tools.p4pipe-mlir-opt.stdinHint=disabled
 tools.p4pipe-mlir-opt.icon=p4.svg
 tools.p4pipe-mlir-opt.nextTools=p4pipe-mlir-translate
 
 tools.p4pipe-mlir-translate.name=mlir-translate
-tools.p4pipe-mlir-translate.exe=/opt/compiler-explorer/p4-latest/bin/mlir-translate
+tools.p4pipe-mlir-translate.exe=@P4_TOOLCHAIN_ROOT@/bin/mlir-translate
 tools.p4pipe-mlir-translate.type=postcompilation
 tools.p4pipe-mlir-translate.class=p4-pipeline-tool
-tools.p4pipe-mlir-translate.exclude=p4c$
+tools.p4pipe-mlir-translate.exclude=p4c
 tools.p4pipe-mlir-translate.options=--mlir-to-llvmir
 tools.p4pipe-mlir-translate.languageId=llvm_p4
 tools.p4pipe-mlir-translate.stdinHint=disabled
@@ -34,10 +35,10 @@ tools.p4pipe-mlir-translate.icon=p4.svg
 tools.p4pipe-mlir-translate.nextTools=p4pipe-opt
 
 tools.p4pipe-opt.name=opt
-tools.p4pipe-opt.exe=/opt/compiler-explorer/p4-latest/bin/opt
+tools.p4pipe-opt.exe=@P4_TOOLCHAIN_ROOT@/bin/opt
 tools.p4pipe-opt.type=postcompilation
 tools.p4pipe-opt.class=p4-pipeline-tool
-tools.p4pipe-opt.exclude=p4c$
+tools.p4pipe-opt.exclude=p4c
 tools.p4pipe-opt.options=-S
 tools.p4pipe-opt.languageId=llvm_p4
 tools.p4pipe-opt.stdinHint=disabled
@@ -45,39 +46,21 @@ tools.p4pipe-opt.icon=p4.svg
 tools.p4pipe-opt.nextTools=p4pipe-mir
 
 tools.p4pipe-mir.name=llc -> LLVM MIR
-tools.p4pipe-mir.exe=/opt/compiler-explorer/p4-latest/bin/llc
+tools.p4pipe-mir.exe=@P4_TOOLCHAIN_ROOT@/bin/llc
 tools.p4pipe-mir.type=postcompilation
 tools.p4pipe-mir.class=p4-pipeline-tool
-tools.p4pipe-mir.exclude=p4c$
+tools.p4pipe-mir.exclude=p4c
 tools.p4pipe-mir.languageId=llvm_mir_p4
 tools.p4pipe-mir.stdinHint=disabled
 tools.p4pipe-mir.icon=p4.svg
 tools.p4pipe-mir.nextTools=p4pipe-llc
 
 tools.p4pipe-llc.name=llc -> Assembly
-tools.p4pipe-llc.exe=/opt/compiler-explorer/p4-latest/bin/llc
+tools.p4pipe-llc.exe=@P4_TOOLCHAIN_ROOT@/bin/llc
 tools.p4pipe-llc.type=postcompilation
 tools.p4pipe-llc.class=p4-pipeline-tool
-tools.p4pipe-llc.exclude=p4c$
+tools.p4pipe-llc.exclude=p4c
 tools.p4pipe-llc.options=-filetype=asm
 tools.p4pipe-llc.languageId=assembly
 tools.p4pipe-llc.stdinHint=disabled
 tools.p4pipe-llc.icon=p4.svg
-
-group.p4c.compilers=p4c
-group.p4c.baseName=p4c
-group.p4c.isSemVer=false
-group.p4mlirtranslate.compilers=p4mlir-translate
-group.p4mlirtranslate.baseName=p4mlir-translate
-group.p4mlirtranslate.isSemVer=false
-
-# p4c 默认后端由工具链构建决定；需要显式指定后端时在此添加 options。
-compiler.p4c.exe=/opt/compiler-explorer/p4-latest/bin/p4c
-compiler.p4c.name=p4c
-compiler.p4c.semver=(fork)
-
-compiler.p4mlir-translate.exe=/opt/compiler-explorer/p4-latest/bin/p4mlir-translate
-compiler.p4mlir-translate.name=p4mlir-translate
-compiler.p4mlir-translate.semver=(fork)
-# p4mlir-translate 不会像 p4c 一样按安装前缀自动发现标准 P4 头文件。
-compiler.p4mlir-translate.options=-I/opt/compiler-explorer/p4-latest/share/p4c/p4include
