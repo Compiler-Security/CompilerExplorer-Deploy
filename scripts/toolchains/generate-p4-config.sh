@@ -6,18 +6,9 @@ COMPILERS_ROOT="${1:-/opt/compiler-explorer}"
 CONFIG_SRC="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/config}"
 CONFIG_DST="${3:-/opt/ce/etc/config}"
 
-required_exes=(
-  bin/p4c
-  bin/p4mlir-opt
-  bin/p4mlir-translate
-  bin/p4mlir-to-json
-  bin/mlir-translate
-  bin/opt
-  bin/llc
-  bin/llvm-objdump
-  bin/llvm-cxxfilt
-)
-required_files=(share/p4c/p4include/core.p4)
+# shellcheck source=p4-builds.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/p4-builds.sh"
+
 languages=(p4 mlir_p4 llvm_p4 llvm_mir_p4)
 
 for language in "${languages[@]}"; do
@@ -26,21 +17,10 @@ for language in "${languages[@]}"; do
 done
 [[ -d "${CONFIG_DST}" ]] \
   || { echo "错误: CE 配置目标目录不存在: ${CONFIG_DST}" >&2; exit 1; }
-for required_command in awk find mktemp sha256sum sort; do
+for required_command in awk date find mktemp readlink sha256sum sort; do
   command -v "${required_command}" >/dev/null 2>&1 \
     || { echo "错误: 缺少命令 ${required_command}。" >&2; exit 1; }
 done
-
-build_is_complete() {
-  local root="$1" relative
-  [[ -d "${root}" ]] || return 1
-  for relative in "${required_exes[@]}"; do
-    [[ -x "${root}/${relative}" ]] || return 1
-  done
-  for relative in "${required_files[@]}"; do
-    [[ -f "${root}/${relative}" ]] || return 1
-  done
-}
 
 stable_token() {
   local checksum
@@ -57,47 +37,30 @@ append_id() {
   fi
 }
 
-declare -a history_records=()
-shopt -s nullglob
-for candidate in "${COMPILERS_ROOT}"/p4mlir-*; do
-  [[ -d "${candidate}" && ! -L "${candidate}" ]] || continue
-  if ! build_is_complete "${candidate}"; then
-    echo ">> 警告: 跳过不完整的 P4 build ${candidate}" >&2
-    continue
-  fi
+declare -a history_labels=() history_paths=() history_tokens=()
+p4_load_retention_days "${COMPILERS_ROOT}"
+p4_select_builds "${COMPILERS_ROOT}"
+for index in "${!P4_SELECTED_BUILD_PATHS[@]}"; do
+  history_labels+=("${P4_SELECTED_BUILD_LABELS[index]}")
+  history_paths+=("${P4_SELECTED_BUILD_PATHS[index]}")
+  history_tokens+=("$(stable_token "${P4_SELECTED_BUILD_IDS[index]}")")
+done
 
-  build_id="${candidate##*/p4mlir-}"
-  mtime="$(find "${candidate}" -maxdepth 0 -printf '%T@')"
-  if [[ "${build_id}" =~ ^([0-9]+)-([[:xdigit:]]{7,64})$ ]]; then
-    # 标准 Jenkins build：标准项优先，按构建号降序；菜单只显示构建号。
-    history_records+=("0"$'\t'"${BASH_REMATCH[1]}"$'\t'"${mtime}"$'\t'"${build_id}"$'\t'"${BASH_REMATCH[1]}"$'\t'"${candidate}")
+for rejected_path in "${P4_REJECTED_BUILD_PATHS[@]}"; do
+  if p4_build_is_complete "${rejected_path}"; then
+    echo ">> 跳过不符合保留策略的 P4 build ${rejected_path}" >&2
   else
-    # 旧格式没有可靠的构建号，保留完整 ID 并按部署时间降序。
-    history_records+=("1"$'\t'"0"$'\t'"${mtime}"$'\t'"${build_id}"$'\t'"${build_id}"$'\t'"${candidate}")
+    echo ">> 警告: 跳过不完整的 P4 build ${rejected_path}" >&2
   fi
 done
-shopt -u nullglob
-
-declare -a history_labels=() history_paths=() history_tokens=()
-if ((${#history_records[@]} > 0)); then
-  mapfile -t sorted_records < <(
-    printf '%s\n' "${history_records[@]}" \
-      | sort -t $'\t' -k1,1n -k2,2nr -k3,3nr -k4,4r
-  )
-  for record in "${sorted_records[@]}"; do
-    IFS=$'\t' read -r _kind _order _mtime build_id label build_path <<< "${record}"
-    history_labels+=("${label}")
-    history_paths+=("${build_path}")
-    history_tokens+=("$(stable_token "${build_id}")")
-  done
-fi
 
 latest_root="${COMPILERS_ROOT}/p4-latest"
 latest_valid=0
-if build_is_complete "${latest_root}"; then
+if p4_build_is_complete "${latest_root}" \
+   && p4_array_contains "$(readlink -f "${latest_root}")" "${P4_SELECTED_BUILD_PATHS[@]}"; then
   latest_valid=1
 elif [[ -e "${latest_root}" || -L "${latest_root}" ]]; then
-  echo ">> 警告: p4-latest 不完整或链接失效，不注册 latest 别名" >&2
+  echo ">> 警告: p4-latest 不完整、链接失效或不符合保留策略，不注册 latest 别名" >&2
 fi
 
 if ((latest_valid)); then
@@ -294,4 +257,4 @@ write_config mlir_p4 "${mlir_p4_compilers}" "${mlir_p4_default}" emit_mlir_p4_co
 write_config llvm_p4 "${llvm_p4_compilers}" "${llvm_p4_default}" emit_llvm_p4_config
 write_config llvm_mir_p4 "${llvm_mir_p4_compilers}" "${llvm_mir_p4_default}" emit_llvm_mir_p4_config
 
-echo ">> 已注册 ${history_count} 个 P4 build；latest=$([[ "${latest_valid}" == 1 ]] && echo yes || echo no)"
+echo ">> 已注册 ${history_count} 个 P4 build（保留天数 ${P4_RETENTION_DAYS}）；latest=$([[ "${latest_valid}" == 1 ]] && echo yes || echo no)"
